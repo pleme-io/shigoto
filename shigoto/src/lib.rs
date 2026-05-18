@@ -2,20 +2,93 @@
 //!
 //! Umbrella crate. Re-exports the public surface of every sibling so
 //! consumers depend on `shigoto = "0.1"` and reach the full algebra
-//! via `use shigoto::{Job, JobId, JobPhase, Dag, Scheduler, ...};`.
+//! via `use shigoto::{Job, JobId, Scheduler, ...};` without naming
+//! every sub-crate.
 //!
 //! Canonical spec: `theory/SHIGOTO.md`.
 //! Theory frame: `theory/THEORY.md` §IV (Motion).
 
 #![forbid(unsafe_code)]
 
+// ── Budget ────────────────────────────────────────────────────────────
 pub use shigoto_budget::{BudgetError, BudgetSpec, BudgetTree};
+
+// ── DAG ───────────────────────────────────────────────────────────────
 pub use shigoto_dag::{Dag, DagError};
-pub use shigoto_emit::TransitionEmitter;
-pub use shigoto_gate::{Gate, GateOutcome};
+
+// ── Emit ──────────────────────────────────────────────────────────────
+pub use shigoto_emit::{AuditFileEmitter, MultiEmitter, NullEmitter, TransitionEmitter};
+
+// ── Gate ──────────────────────────────────────────────────────────────
+pub use shigoto_gate::{
+    self, AllUpstreamsTerminal, Gate, GateContext, GateOutcome, OperatorApproved,
+};
+
+// ── Retry ─────────────────────────────────────────────────────────────
 pub use shigoto_retry::{FailureRecord, RetryDecider, RetryDecision, RetryPolicy};
+
+// ── Scheduler ─────────────────────────────────────────────────────────
 pub use shigoto_scheduler::{InProcessScheduler, Scheduler, SchedulerError};
+
+// ── Types (the foundation) ────────────────────────────────────────────
 pub use shigoto_types::{
-    JobError, JobId, JobInput, JobKindId, JobOutput, JobPhase, JobScope, JobSubject, SkipReason,
+    advance, ErasedJob, GateAggregate, IllegalTransition, Job, JobError, JobId, JobInput,
+    JobKindId, JobOutput, JobPhase, JobScope, JobSubject, RetryOutcome, Signal, SkipReason,
     Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift,
 };
+
+#[cfg(test)]
+mod tests {
+    //! Smoke tests that prove the canonical consumer import works:
+    //! `use shigoto::{...}` reaches every concept needed to build a
+    //! Job + register it + tick the scheduler.
+
+    use super::*;
+    use std::sync::Arc;
+
+    #[derive(thiserror::Error, Debug)]
+    #[error("smoke")]
+    struct SmokeErr;
+
+    struct SmokeJob;
+
+    #[async_trait::async_trait]
+    impl Job for SmokeJob {
+        type Output = ();
+        type Error = SmokeErr;
+        fn id(&self) -> JobId {
+            JobId {
+                scope: JobScope::Global,
+                kind: JobKindId::new("smoke"),
+                subject: JobSubject::None,
+            }
+        }
+        fn kind(&self) -> JobKindId {
+            JobKindId::new("smoke")
+        }
+        async fn execute(&self) -> Result<(), SmokeErr> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn umbrella_consumer_reaches_full_surface() {
+        // Every type used here is re-exported by `shigoto::*` so a
+        // consumer outside this workspace can write the exact same
+        // imports.
+        let scheduler = InProcessScheduler::new("umbrella-smoke")
+            .with_emitter(Arc::new(NullEmitter));
+        let job = Arc::new(SmokeJob);
+        let id = <SmokeJob as Job>::id(&job);
+        scheduler.register_job(job).await;
+
+        let mut dag = Dag::new();
+        dag.ensure_node(id.clone());
+        let receipt: TickReceipt = scheduler.tick(&mut dag).await.unwrap();
+        // Snapshot via the trait method — Scheduler::snapshot lands
+        // on the umbrella re-export too.
+        let snap: Snapshot = scheduler.snapshot(&dag).await;
+        assert_eq!(snap.phases.get(&id), Some(&JobPhase::Succeeded));
+        assert!(receipt.phase_counts.contains_key("succeeded"));
+    }
+}

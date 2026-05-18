@@ -18,3 +18,8 @@ shigoto-budget.workspace = true
 shigoto-retry.workspace = true
 shigoto-gate.workspace = true
 shigoto-emit.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
