@@ -17,7 +17,9 @@ pub use shigoto_budget::{BudgetError, BudgetSpec, BudgetTree};
 pub use shigoto_dag::{Dag, DagError};
 
 // ── Emit ──────────────────────────────────────────────────────────────
-pub use shigoto_emit::{AuditFileEmitter, MultiEmitter, NullEmitter, TransitionEmitter};
+pub use shigoto_emit::{
+    AuditFileEmitter, InMemorySink, MultiEmitter, NullEmitter, NullSink, TransitionEmitter,
+};
 
 // ── Gate ──────────────────────────────────────────────────────────────
 pub use shigoto_gate::{
@@ -33,8 +35,8 @@ pub use shigoto_scheduler::{InProcessScheduler, Scheduler, SchedulerError};
 // ── Types (the foundation) ────────────────────────────────────────────
 pub use shigoto_types::{
     advance, ErasedJob, GateAggregate, IllegalTransition, Job, JobError, JobId, JobInput,
-    JobKindId, JobOutput, JobPhase, JobScope, JobSubject, RetryOutcome, Signal, SkipReason,
-    Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift,
+    JobKindId, JobOutput, JobPhase, JobScope, JobSubject, OutputSink, RetryOutcome, Signal,
+    SkipReason, Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift,
 };
 
 #[cfg(test)]

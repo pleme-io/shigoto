@@ -234,6 +234,50 @@ pub trait JobInput: Send + Sync + 'static {}
 pub trait JobOutput: Send + Sync + 'static {}
 pub trait JobError: std::error::Error + Send + Sync + 'static {}
 
+/// Typed receiver for `Job::Output` values. Jobs call `record` on a
+/// successful `execute` so consumers (reconcile receipts, audit
+/// trails, dashboards) can read the typed outcomes the scheduler's
+/// phase-tracking discards.
+///
+/// Per `theory/SHIGOTO.md` §VIII (output capture) — the scheduler
+/// itself doesn't hold sinks; Jobs carry them. This keeps the typed
+/// `O` parameter from leaking into the scheduler's heterogeneous
+/// `Vec<Box<dyn ErasedJob>>` storage (which would require type
+/// erasure on the sink too). The cost: each Job impl decides which
+/// sink (if any) to wire in, but the gain is full type safety from
+/// producer to consumer.
+///
+/// Implementations:
+/// - `NullSink<O>` — discards everything; default for Jobs that
+///   don't care about output capture.
+/// - `InMemorySink<O>` — stores into `Arc<Mutex<HashMap<JobId, O>>>`
+///   so the consumer can drain after ticks complete.
+/// - Both live in `shigoto-emit` alongside the `TransitionEmitter`
+///   sinks, since the two surfaces are conceptually paired.
+///
+/// `record` takes `&O` so non-`Clone` Outputs are allowed at the
+/// trait level. Concrete sinks that need owned values (`InMemorySink`)
+/// add `O: Clone` at their `impl` boundary, not on the trait.
+///
+/// `record` is async because audit-style sinks may want to fsync or
+/// push to a queue; in-memory sinks return immediately.
+#[async_trait::async_trait]
+pub trait OutputSink<O>: Send + Sync + 'static
+where
+    O: Send + Sync + 'static,
+{
+    /// Called by a Job from its `execute` method after computing a
+    /// successful `Output`. The Job retains ownership; sinks that
+    /// need storage should clone internally.
+    ///
+    /// `O: Sync` is required because the async-trait desugar captures
+    /// `&O` across an `await` boundary — the resulting future is only
+    /// `Send` when the borrowed reference is. Outputs that aren't
+    /// `Sync` (rare for plain data; common for things like `Cell`)
+    /// can't use the typed sink and must capture via a side channel.
+    async fn record(&self, job_id: &JobId, output: &O);
+}
+
 /// The typed Job trait — what every consumer's domain-specific job
 /// implements. Per `theory/SHIGOTO.md` §III.1.
 ///
