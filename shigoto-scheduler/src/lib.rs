@@ -774,6 +774,203 @@ mod tests {
         assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
     }
 
+    /// End-to-end integration: gates + retry + budget + emitter +
+    /// dependency-ordered DAG all in one tick sequence. Proves the
+    /// pieces compose, not just work individually.
+    ///
+    /// Shape:
+    ///     root  ─→  middle  ─→  leaf
+    ///   (OK)   (gate: bool)  (fail twice → succeed)
+    ///
+    /// - root succeeds immediately (no gate).
+    /// - middle has a gate that defaults to false; we flip it after
+    ///   tick 1.
+    /// - leaf fails the first time, succeeds the second (Fixed(2, 0)
+    ///   retry policy).
+    /// - All transitions captured by an emitter; assert the order +
+    ///   final phases.
+    #[tokio::test]
+    async fn integration_diamond_with_gate_and_retry_walks_expected_path() {
+        use shigoto_gate::OperatorApproved;
+        use shigoto_retry::RetryPolicy;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        use std::sync::Mutex;
+
+        // ── Test jobs ───────────────────────────────────────
+        // Middle's gate flips when this flips.
+        let middle_gate_open = Arc::new(AtomicBool::new(false));
+
+        // Leaf's first call fails, second succeeds (just to exercise
+        // the retry path).
+        struct FlakyLeaf {
+            id: JobId,
+            attempts: Arc<AtomicU32>,
+        }
+
+        #[async_trait]
+        impl shigoto_types::Job for FlakyLeaf {
+            type Output = ();
+            type Error = OkError;
+            fn id(&self) -> JobId {
+                self.id.clone()
+            }
+            fn kind(&self) -> JobKindId {
+                self.id.kind.clone()
+            }
+            async fn execute(&self) -> Result<(), OkError> {
+                let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    Err(OkError)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        // ── Capturing emitter ──────────────────────────────
+        struct Capture {
+            log: Arc<Mutex<Vec<TransitionEvent>>>,
+        }
+        impl shigoto_emit::TransitionEmitter for Capture {
+            fn emit(&self, event: TransitionEvent) {
+                self.log.lock().unwrap().push(event);
+            }
+        }
+        let log = Arc::new(Mutex::new(Vec::new()));
+
+        // ── Scheduler ──────────────────────────────────────
+        let scheduler = InProcessScheduler::new("integration")
+            .with_emitter(Arc::new(Capture { log: log.clone() }));
+        // Three distinct kinds so policies / gates apply per-node
+        // rather than collide via shared kind.
+        let root_kind = JobKindId::new("root-kind");
+        let middle_kind = JobKindId::new("middle-kind");
+        let leaf_kind = JobKindId::new("leaf-kind");
+
+        // Middle's gate: closure reads our shared atomic.
+        let gate_check = middle_gate_open.clone();
+        scheduler
+            .register_gate(
+                middle_kind.clone(),
+                Arc::new(OperatorApproved::new("middle-gate", move || {
+                    gate_check.load(Ordering::SeqCst)
+                })),
+            )
+            .await;
+
+        // Leaf retries up to 2 attempts with zero delay.
+        scheduler
+            .register_retry_policy(
+                leaf_kind.clone(),
+                RetryPolicy::Fixed {
+                    attempts: 2,
+                    delay_ms: 0,
+                },
+            )
+            .await;
+
+        // ── DAG ────────────────────────────────────────────
+        let root = JobId {
+            scope: JobScope::Global,
+            kind: root_kind.clone(),
+            subject: JobSubject::Pinned("root".into()),
+        };
+        let middle = JobId {
+            scope: JobScope::Global,
+            kind: middle_kind.clone(),
+            subject: JobSubject::Pinned("middle".into()),
+        };
+        let leaf = JobId {
+            scope: JobScope::Global,
+            kind: leaf_kind.clone(),
+            subject: JobSubject::Pinned("leaf".into()),
+        };
+        let mut dag = Dag::new();
+        dag.add_edge(root.clone(), middle.clone());
+        dag.add_edge(middle.clone(), leaf.clone());
+
+        scheduler
+            .register_job(Arc::new(OkJob { id: root.clone() }))
+            .await;
+        scheduler
+            .register_job(Arc::new(OkJob { id: middle.clone() }))
+            .await;
+        let leaf_attempts = Arc::new(AtomicU32::new(0));
+        scheduler
+            .register_job(Arc::new(FlakyLeaf {
+                id: leaf.clone(),
+                attempts: leaf_attempts.clone(),
+            }))
+            .await;
+
+        // ── Tick 1 ─────────────────────────────────────────
+        // root → Succeeded. middle: AllUpstreamsTerminal passes (root
+        // succeeded) but OperatorApproved gate is closed → Gated.
+        // leaf: AllUpstreamsTerminal waits on middle → stays Pending.
+        scheduler.tick(&mut dag).await.unwrap();
+        assert_eq!(scheduler.phase_of(&root).await, JobPhase::Succeeded);
+        assert_eq!(scheduler.phase_of(&middle).await, JobPhase::Gated);
+        let leaf_phase = scheduler.phase_of(&leaf).await;
+        assert!(
+            matches!(leaf_phase, JobPhase::Pending | JobPhase::Gated),
+            "expected leaf in Pending/Gated, got {leaf_phase:?}"
+        );
+
+        // ── Flip middle's gate, pump ticks until convergence ────
+        middle_gate_open.store(true, Ordering::SeqCst);
+
+        // Schedulers guarantee eventual progress, not single-tick
+        // progress — gate state changes propagate across at most
+        // one tick per affected job. Pump up to 16 ticks then
+        // assert final state (way more than enough for 3 jobs).
+        for _ in 0..16 {
+            let m = scheduler.phase_of(&middle).await;
+            let l = scheduler.phase_of(&leaf).await;
+            let m_done = matches!(m, JobPhase::Succeeded | JobPhase::Deadlettered);
+            let l_done = matches!(l, JobPhase::Succeeded | JobPhase::Deadlettered);
+            if m_done && l_done {
+                break;
+            }
+            scheduler.tick(&mut dag).await.unwrap();
+        }
+        assert_eq!(
+            scheduler.phase_of(&middle).await,
+            JobPhase::Succeeded,
+            "middle should succeed once gate is open"
+        );
+        assert_eq!(
+            scheduler.phase_of(&leaf).await,
+            JobPhase::Succeeded,
+            "leaf should succeed on its retry"
+        );
+        // Leaf executed exactly twice — first fail, second success.
+        assert_eq!(leaf_attempts.load(Ordering::SeqCst), 2);
+
+        // ── Verify emitter captured every transition ───────
+        let captured = log.lock().unwrap();
+        // Every captured event has a non-empty tool tag.
+        assert!(captured.iter().all(|e| e.tool == "integration"));
+        // We should have at least: root (3 transitions) + middle (4+
+        // including Gated detour) + leaf (cycle through retry).
+        // Just assert a reasonable lower bound rather than the exact
+        // count (depends on tick-cap-induced re-evaluations).
+        assert!(
+            captured.len() >= 10,
+            "expected ≥10 transitions across 3 jobs + retry, got {}",
+            captured.len()
+        );
+        // Every job reached Succeeded as terminal — assert one
+        // transition with to=Succeeded per job.
+        let succeeded_jobs: std::collections::HashSet<JobId> = captured
+            .iter()
+            .filter(|e| e.to == JobPhase::Succeeded)
+            .map(|e| e.job_id.clone())
+            .collect();
+        assert!(succeeded_jobs.contains(&root));
+        assert!(succeeded_jobs.contains(&middle));
+        assert!(succeeded_jobs.contains(&leaf));
+    }
+
     #[tokio::test]
     async fn unhealed_in_receipt_lists_deadlettered_and_waiting() {
         let scheduler = InProcessScheduler::new("test");
