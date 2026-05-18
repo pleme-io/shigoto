@@ -141,6 +141,25 @@ impl Dag {
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
     }
+
+    /// Direct predecessors of `id` — every node that has an edge
+    /// pointing INTO `id`. Used by `AllUpstreamsTerminal` and similar
+    /// gates to ask "have all my upstream dependencies finished?".
+    ///
+    /// Returns an empty vec when `id` is not in the DAG or has no
+    /// incoming edges (root node). Order is petgraph-defined but
+    /// stable for a given graph + insertion sequence; consumers that
+    /// need deterministic order sort the result.
+    #[must_use]
+    pub fn predecessors(&self, id: &JobId) -> Vec<JobId> {
+        let Some(idx) = self.index.get(id) else {
+            return Vec::new();
+        };
+        self.graph
+            .neighbors_directed(*idx, petgraph::Direction::Incoming)
+            .map(|p| self.graph[p].clone())
+            .collect()
+    }
 }
 
 impl Default for Dag {
@@ -258,5 +277,27 @@ mod tests {
             Err(DagError::Cycle(_)) => {}
             other => panic!("expected DagError::Cycle, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn predecessors_returns_direct_incoming_edges() {
+        // root → a → c
+        //       ↘ b → c
+        let mut d = Dag::new();
+        d.add_edge(n("r", "root"), n("r", "a"));
+        d.add_edge(n("r", "root"), n("r", "b"));
+        d.add_edge(n("r", "a"), n("r", "c"));
+        d.add_edge(n("r", "b"), n("r", "c"));
+
+        // c has two direct predecessors (a, b) — not root (root is
+        // grandparent, not direct).
+        let preds = d.predecessors(&n("r", "c"));
+        assert_eq!(preds.len(), 2);
+        assert!(preds.contains(&n("r", "a")));
+        assert!(preds.contains(&n("r", "b")));
+        // root has no incoming edges.
+        assert!(d.predecessors(&n("r", "root")).is_empty());
+        // Unknown node yields empty vec.
+        assert!(d.predecessors(&n("r", "ghost")).is_empty());
     }
 }
