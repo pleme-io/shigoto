@@ -16,6 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use shigoto_dag::Dag;
+use shigoto_emit::{NullEmitter, TransitionEmitter};
 use shigoto_types::{
     advance, ErasedJob, GateAggregate, IllegalTransition, JobId, JobPhase, RetryOutcome, Signal,
     Snapshot, TickReceipt, TransitionEvent, TransitionReason,
@@ -61,6 +62,7 @@ pub trait Scheduler: Send + Sync {
 pub struct InProcessScheduler {
     state: tokio::sync::RwLock<SchedulerState>,
     tool: String,
+    emitter: Arc<dyn TransitionEmitter>,
 }
 
 struct SchedulerState {
@@ -71,8 +73,9 @@ struct SchedulerState {
 }
 
 impl InProcessScheduler {
-    /// Build a new scheduler. `tool` is the consumer-name tag emitted
-    /// on every TransitionEvent (e.g. "tend", "forge-gen").
+    /// Build a new scheduler with the no-op `NullEmitter`. `tool` is
+    /// the consumer-name tag emitted on every TransitionEvent (e.g.
+    /// "tend", "forge-gen"). Use `with_emitter` to attach a real sink.
     #[must_use]
     pub fn new(tool: impl Into<String>) -> Self {
         Self {
@@ -82,7 +85,17 @@ impl InProcessScheduler {
                 timeouts: HashMap::new(),
             }),
             tool: tool.into(),
+            emitter: Arc::new(NullEmitter),
         }
+    }
+
+    /// Replace the default `NullEmitter` with a real sink — typically
+    /// `AuditFileEmitter` or `MultiEmitter` from shigoto-emit. Every
+    /// FSM transition emit()s here.
+    #[must_use]
+    pub fn with_emitter(mut self, emitter: Arc<dyn TransitionEmitter>) -> Self {
+        self.emitter = emitter;
+        self
     }
 
     /// Register a Job with the scheduler. The DAG holds JobIds; the
@@ -251,14 +264,18 @@ impl InProcessScheduler {
         let to = advance(from.clone(), signal)?;
         state.phases.insert(id.clone(), to.clone());
 
-        transitions.push(TransitionEvent {
+        let event = TransitionEvent {
             at: chrono::Utc::now(),
             job_id: id.clone(),
             from,
             to,
             reason: reason_from(&signal_clone),
             tool: self.tool.clone(),
-        });
+        };
+        // Fire the emitter (no-op for NullEmitter; appends a JSONL line
+        // for AuditFileEmitter; etc).
+        self.emitter.emit(event.clone());
+        transitions.push(event);
         Ok(())
     }
 
@@ -488,5 +505,35 @@ mod tests {
         // No registration!
         scheduler.tick(&mut dag).await.unwrap();
         assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
+    }
+
+    #[tokio::test]
+    async fn emitter_receives_every_transition() {
+        use shigoto_emit::TransitionEmitter;
+        use std::sync::Mutex;
+
+        struct Capture {
+            log: Arc<Mutex<Vec<TransitionEvent>>>,
+        }
+        impl TransitionEmitter for Capture {
+            fn emit(&self, event: TransitionEvent) {
+                self.log.lock().unwrap().push(event);
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let scheduler = InProcessScheduler::new("test")
+            .with_emitter(Arc::new(Capture { log: log.clone() }));
+        let id = mk_id("test", "emit-me");
+        let mut dag = Dag::new();
+        dag.ensure_node(id.clone());
+        scheduler.register_job(Arc::new(OkJob { id: id.clone() })).await;
+
+        scheduler.tick(&mut dag).await.unwrap();
+        let captured = log.lock().unwrap();
+        // Pending → Ready → Running → Succeeded = 3 transitions.
+        assert_eq!(captured.len(), 3);
+        assert_eq!(captured[0].from, JobPhase::Pending);
+        assert_eq!(captured[2].to, JobPhase::Succeeded);
     }
 }
