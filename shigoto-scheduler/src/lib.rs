@@ -17,9 +17,10 @@ use async_trait::async_trait;
 
 use shigoto_dag::Dag;
 use shigoto_emit::{NullEmitter, TransitionEmitter};
+use shigoto_gate::{self, AllUpstreamsTerminal, Gate, GateContext, GateOutcome};
 use shigoto_types::{
-    advance, ErasedJob, GateAggregate, IllegalTransition, JobId, JobPhase, RetryOutcome, Signal,
-    Snapshot, TickReceipt, TransitionEvent, TransitionReason,
+    advance, ErasedJob, GateAggregate, IllegalTransition, JobId, JobKindId, JobPhase, RetryOutcome,
+    Signal, Snapshot, TickReceipt, TransitionEvent, TransitionReason,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -70,6 +71,10 @@ struct SchedulerState {
     jobs: HashMap<JobId, Arc<dyn ErasedJob>>,
     /// Per-job timeout overrides.
     timeouts: HashMap<JobId, Duration>,
+    /// Per-kind gate registry. Every job of kind K consults
+    /// `gates[K]` (plus the implicit AllUpstreamsTerminal) during
+    /// gate evaluation. Empty vec means "no kind-specific gates."
+    gates: HashMap<JobKindId, Vec<Arc<dyn Gate>>>,
 }
 
 impl InProcessScheduler {
@@ -83,10 +88,20 @@ impl InProcessScheduler {
                 phases: HashMap::new(),
                 jobs: HashMap::new(),
                 timeouts: HashMap::new(),
+                gates: HashMap::new(),
             }),
             tool: tool.into(),
             emitter: Arc::new(NullEmitter),
         }
+    }
+
+    /// Register a Gate against a JobKind. Every job of that kind
+    /// consults this Gate (plus the implicit AllUpstreamsTerminal)
+    /// during gate evaluation. Multiple gates per kind compose via
+    /// `shigoto_gate::reduce` (worst-outcome wins).
+    pub async fn register_gate(&self, kind: JobKindId, gate: Arc<dyn Gate>) {
+        let mut state = self.state.write().await;
+        state.gates.entry(kind).or_default().push(gate);
     }
 
     /// Replace the default `NullEmitter` with a real sink — typically
@@ -156,12 +171,14 @@ impl Scheduler for InProcessScheduler {
                 // Drive each Job's FSM as far forward as it can go in
                 // a single tick. We loop until the phase stops
                 // advancing (either terminal, blocked on operator, or
-                // waiting on budget/backoff). Capped at 6 steps —
-                // longest forward chain is Pending→Ready→Running→
-                // Succeeded (3) and the failure chain is one longer.
+                // waiting on a gate). Capped at 6 steps — longest
+                // forward chain is Pending→Ready→Running→Succeeded
+                // (3) and the failure chain is one longer.
                 for _ in 0..6 {
                     let from = self.phase_of(&id).await;
-                    let progressed = self.advance_once(&id, &from, &mut transitions).await?;
+                    let progressed = self
+                        .advance_once(&id, &from, &*dag, &mut transitions)
+                        .await?;
                     if !progressed {
                         break;
                     }
@@ -192,11 +209,13 @@ impl Scheduler for InProcessScheduler {
 impl InProcessScheduler {
     /// Apply one FSM step to the given job. Returns `Ok(true)` when
     /// the phase advanced, `Ok(false)` when no progress is possible
-    /// from the current phase (terminal, waiting for operator, etc.).
+    /// from the current phase (terminal, waiting for operator, gated
+    /// on something that hasn't changed since last check).
     async fn advance_once(
         &self,
         id: &JobId,
         from: &JobPhase,
+        dag: &Dag,
         transitions: &mut Vec<TransitionEvent>,
     ) -> Result<bool, SchedulerError> {
         match from {
@@ -205,9 +224,21 @@ impl InProcessScheduler {
             // Operator-gated — no automatic progress.
             JobPhase::WaitingForOperator => Ok(false),
 
-            // Gate evaluation (v0.1: always passes).
+            // Gate evaluation — implicit AllUpstreamsTerminal + per-kind
+            // consumer-registered gates, reduced to a GateAggregate
+            // and dispatched via Signal::EvaluateGates.
             JobPhase::Pending | JobPhase::Gated | JobPhase::Retrying { .. } => {
-                self.dispatch(id, Signal::EvaluateGates(GateAggregate::AllPassed), transitions)
+                let aggregate = self.evaluate_gates(id, dag).await;
+                // If the aggregate is SomeWaiting AND we're already
+                // Gated, no useful transition fires (Gated → Gated is
+                // a self-loop; record as no-progress so the outer loop
+                // stops looping and the scheduler moves on).
+                let already_gated = matches!(from, JobPhase::Gated)
+                    && matches!(aggregate, GateAggregate::SomeWaiting);
+                if already_gated {
+                    return Ok(false);
+                }
+                self.dispatch(id, Signal::EvaluateGates(aggregate), transitions)
                     .await?;
                 Ok(true)
             }
@@ -237,6 +268,32 @@ impl InProcessScheduler {
                 Ok(true)
             }
         }
+    }
+
+    /// Evaluate the gate cohort for `id` against the current snapshot
+    /// + dag. The cohort = implicit `AllUpstreamsTerminal` (enforces
+    /// DAG edge semantics) + consumer-registered gates for the job's
+    /// kind. Reduced via `shigoto_gate::reduce`.
+    async fn evaluate_gates(&self, id: &JobId, dag: &Dag) -> GateAggregate {
+        let (kind_gates, snapshot) = {
+            let state = self.state.read().await;
+            let kind_gates = state.gates.get(&id.kind).cloned().unwrap_or_default();
+            let snapshot = Snapshot {
+                phases: state.phases.clone(),
+            };
+            (kind_gates, snapshot)
+        };
+        let ctx = GateContext {
+            job_id: id,
+            snapshot: &snapshot,
+            dag,
+        };
+        let mut outcomes: Vec<GateOutcome> = Vec::with_capacity(kind_gates.len() + 1);
+        outcomes.push(AllUpstreamsTerminal.evaluate(&ctx));
+        for gate in &kind_gates {
+            outcomes.push(gate.evaluate(&ctx));
+        }
+        shigoto_gate::reduce(&outcomes)
     }
 
     async fn snapshot_inner(&self) -> Snapshot {
@@ -505,6 +562,36 @@ mod tests {
         // No registration!
         scheduler.tick(&mut dag).await.unwrap();
         assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
+    }
+
+    #[tokio::test]
+    async fn registered_gate_keeps_job_in_gated_phase() {
+        use shigoto_gate::OperatorApproved;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let approved = Arc::new(AtomicBool::new(false));
+        let approved_check = approved.clone();
+        let gate = Arc::new(OperatorApproved::new("manual", move || {
+            approved_check.load(Ordering::SeqCst)
+        }));
+
+        let scheduler = InProcessScheduler::new("test");
+        scheduler
+            .register_gate(JobKindId::new("test"), gate)
+            .await;
+        let id = mk_id("test", "blocked");
+        let mut dag = Dag::new();
+        dag.ensure_node(id.clone());
+        scheduler.register_job(Arc::new(OkJob { id: id.clone() })).await;
+
+        // First tick: gate returns Wait → job lands in Gated.
+        scheduler.tick(&mut dag).await.unwrap();
+        assert_eq!(scheduler.phase_of(&id).await, JobPhase::Gated);
+
+        // Flip the gate → next tick advances to Succeeded.
+        approved.store(true, Ordering::SeqCst);
+        scheduler.tick(&mut dag).await.unwrap();
+        assert_eq!(scheduler.phase_of(&id).await, JobPhase::Succeeded);
     }
 
     #[tokio::test]
