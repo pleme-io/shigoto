@@ -35,8 +35,9 @@ pub use shigoto_scheduler::{InProcessScheduler, Scheduler, SchedulerError};
 // ── Types (the foundation) ────────────────────────────────────────────
 pub use shigoto_types::{
     advance, ErasedJob, GateAggregate, IllegalTransition, Job, JobError, JobId, JobInput,
-    JobKindId, JobOutput, JobPhase, JobScope, JobSubject, OutputSink, RetryOutcome, Signal,
-    SkipReason, Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift,
+    JobKindId, JobOutput, JobPhase, JobScope, JobSubject, OutputSink, RecordingJob,
+    RetryOutcome, Signal, SkipReason, Snapshot, TickReceipt, TransitionEvent, TransitionReason,
+    UnhealedDrift,
 };
 
 #[cfg(test)]

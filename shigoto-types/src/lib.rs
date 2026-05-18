@@ -278,6 +278,95 @@ where
     async fn record(&self, job_id: &JobId, output: &O);
 }
 
+/// Convenience trait that captures the most common Job authoring
+/// shape across pleme-io consumers: a Job whose typed Output flows
+/// through an [`OutputSink`] for consumer-side capture, and whose
+/// identity decomposes into (scope, kind, subject).
+///
+/// Implementations write only the per-Job logic:
+/// - `KIND` — the typed work-class id constant.
+/// - `scope()` / `subject()` — the two non-kind coordinates of `JobId`.
+/// - `output_sink()` — optional wired sink for output capture.
+/// - `execute_body()` — the actual side-effecting work.
+///
+/// The blanket `impl<T: RecordingJob> Job for T` below derives:
+/// - `Job::id()` — assembled from scope() + subject() + KIND.
+/// - `Job::kind()` — `JobKindId::new(T::KIND)`.
+/// - `Job::execute()` — calls `execute_body`, then records to the
+///   sink (when present) before returning the typed Output.
+///
+/// Consumers either implement `Job` directly (full control) or
+/// `RecordingJob` (the common case). Not both — the orphan rule +
+/// the blanket impl mean implementing one excludes the other for
+/// the same type.
+#[async_trait::async_trait]
+pub trait RecordingJob: Send + Sync + 'static {
+    /// Typed work output. `Send + Sync + Clone` are needed so the
+    /// blanket `Job::execute` can call `sink.record(&id, &output)`
+    /// across an await boundary, and so `InMemorySink<O>` can hold
+    /// owned copies.
+    type Output: Send + Sync + Clone + 'static;
+
+    /// Typed error. Same bounds as `Job::Error`.
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Canonical kind id. Compile-time constant so two Jobs of the
+    /// same impl always share the same `JobKindId` without an
+    /// allocation per call.
+    const KIND: &'static str;
+
+    /// First coordinate of `JobId`. Implementations typically clone
+    /// from `self.workspace` or similar.
+    fn scope(&self) -> JobScope;
+
+    /// Third coordinate of `JobId`. Implementations typically clone
+    /// from `self.repo_name` or similar.
+    fn subject(&self) -> JobSubject;
+
+    /// Optional typed sink. `None` means outputs are dropped after
+    /// execute returns; `Some` records every successful outcome.
+    fn output_sink(&self) -> Option<&std::sync::Arc<dyn OutputSink<Self::Output>>>;
+
+    /// The actual work. Run only on Ready→Running. MUST be idempotent.
+    /// The blanket `Job::execute` wraps this with sink recording so
+    /// callers never write the `if let Some(sink) = ... { sink.record... }`
+    /// dance themselves.
+    async fn execute_body(&self) -> Result<Self::Output, Self::Error>;
+}
+
+#[async_trait::async_trait]
+impl<T: RecordingJob> Job for T {
+    type Output = T::Output;
+    type Error = T::Error;
+
+    fn id(&self) -> JobId {
+        JobId {
+            scope: self.scope(),
+            kind: JobKindId::new(T::KIND),
+            subject: self.subject(),
+        }
+    }
+
+    fn kind(&self) -> JobKindId {
+        JobKindId::new(T::KIND)
+    }
+
+    async fn execute(&self) -> Result<T::Output, T::Error> {
+        let outcome = self.execute_body().await?;
+        if let Some(sink) = self.output_sink() {
+            // Compute the JobId twice (once here, once via id() above).
+            // Cheap — id() is pure data clones.
+            let id = JobId {
+                scope: self.scope(),
+                kind: JobKindId::new(T::KIND),
+                subject: self.subject(),
+            };
+            sink.record(&id, &outcome).await;
+        }
+        Ok(outcome)
+    }
+}
+
 /// The typed Job trait — what every consumer's domain-specific job
 /// implements. Per `theory/SHIGOTO.md` §III.1.
 ///
@@ -716,6 +805,110 @@ mod job_tests {
         let j: Box<dyn ErasedJob> = Box::new(NoopJob);
         assert_eq!(j.id().kind.0, "noop");
         assert!(j.execute_erased().await.is_ok());
+    }
+
+    // ── RecordingJob tests ──────────────────────────────────────────
+
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    /// Simple in-memory sink used to verify the blanket `Job::execute`
+    /// records outputs after `execute_body` succeeds.
+    #[derive(Default)]
+    struct CaptureSink<O: Clone + Send + Sync + 'static> {
+        records: Mutex<Vec<(JobId, O)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl<O: Clone + Send + Sync + 'static> OutputSink<O> for CaptureSink<O> {
+        async fn record(&self, job_id: &JobId, output: &O) {
+            self.records
+                .lock()
+                .expect("CaptureSink mutex poisoned")
+                .push((job_id.clone(), output.clone()));
+        }
+    }
+
+    /// Reference impl exercising every `RecordingJob` callback.
+    struct RecJob {
+        scope: JobScope,
+        subject: JobSubject,
+        sink: Option<Arc<dyn OutputSink<u32>>>,
+        answer: u32,
+    }
+
+    #[async_trait::async_trait]
+    impl RecordingJob for RecJob {
+        type Output = u32;
+        type Error = NoopError;
+        const KIND: &'static str = "test-recording";
+
+        fn scope(&self) -> JobScope {
+            self.scope.clone()
+        }
+        fn subject(&self) -> JobSubject {
+            self.subject.clone()
+        }
+        fn output_sink(&self) -> Option<&Arc<dyn OutputSink<Self::Output>>> {
+            self.sink.as_ref()
+        }
+        async fn execute_body(&self) -> Result<u32, NoopError> {
+            Ok(self.answer)
+        }
+    }
+
+    #[tokio::test]
+    async fn recording_job_blanket_provides_job_id_and_kind() {
+        let job = RecJob {
+            scope: JobScope::Workspace("ws".into()),
+            subject: JobSubject::Repo("r".into()),
+            sink: None,
+            answer: 1,
+        };
+        let id = <RecJob as Job>::id(&job);
+        assert_eq!(id.kind.0, "test-recording");
+        match id.scope {
+            JobScope::Workspace(w) => assert_eq!(w, "ws"),
+            _ => panic!("wrong scope"),
+        }
+        match id.subject {
+            JobSubject::Repo(r) => assert_eq!(r, "r"),
+            _ => panic!("wrong subject"),
+        }
+        let kind = <RecJob as Job>::kind(&job);
+        assert_eq!(kind.0, "test-recording");
+    }
+
+    #[tokio::test]
+    async fn recording_job_blanket_execute_records_to_sink_on_success() {
+        let sink: Arc<CaptureSink<u32>> = Arc::new(CaptureSink::default());
+        let sink_dyn: Arc<dyn OutputSink<u32>> = sink.clone();
+        let job = RecJob {
+            scope: JobScope::Global,
+            subject: JobSubject::None,
+            sink: Some(sink_dyn),
+            answer: 42,
+        };
+        let result = <RecJob as Job>::execute(&job).await.unwrap();
+        assert_eq!(result, 42);
+
+        let recs = sink.records.lock().unwrap();
+        assert_eq!(recs.len(), 1, "sink should have captured one record");
+        assert_eq!(recs[0].1, 42);
+    }
+
+    #[tokio::test]
+    async fn recording_job_without_sink_skips_recording() {
+        let job = RecJob {
+            scope: JobScope::Global,
+            subject: JobSubject::None,
+            sink: None,
+            answer: 7,
+        };
+        // execute returns Ok with the typed Output; no sink to verify
+        // against — just confirm the absent-sink path doesn't panic.
+        let result = <RecJob as Job>::execute(&job).await.unwrap();
+        assert_eq!(result, 7);
     }
 }
 
