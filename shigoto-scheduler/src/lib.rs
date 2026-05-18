@@ -22,7 +22,7 @@ use shigoto_gate::{self, AllUpstreamsTerminal, Gate, GateContext, GateOutcome};
 use shigoto_retry::{FailureRecord, RetryDecision, RetryPolicy};
 use shigoto_types::{
     advance, ErasedJob, GateAggregate, IllegalTransition, JobId, JobKindId, JobPhase, RetryOutcome,
-    Signal, Snapshot, TickReceipt, TransitionEvent, TransitionReason,
+    Signal, Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -247,12 +247,13 @@ impl Scheduler for InProcessScheduler {
 
         let snapshot = self.snapshot_inner().await;
         let phase_counts = phase_count_summary(&snapshot.phases);
+        let unhealed = collect_unhealed(&snapshot.phases);
 
         Ok(TickReceipt {
             tick_at: started_at,
             phase_counts,
             transitions_this_tick: transitions,
-            unhealed: Vec::new(),
+            unhealed,
         })
     }
 
@@ -524,6 +525,49 @@ impl InProcessScheduler {
     }
 }
 
+/// Project the FSM snapshot to the subset of jobs requiring operator
+/// attention — Deadlettered (terminal failure; needs operator to
+/// retry-from-scratch or accept) and WaitingForOperator (paused
+/// pending decision). Failed and Retrying are transient (the next
+/// tick resolves them) so they don't surface here.
+///
+/// age_seconds is 0 in v0.1 — requires per-job last-advanced
+/// timestamps which the scheduler doesn't track yet. A future
+/// milestone wires that in (would also unblock §III.13's "dirty
+/// repo > 24h" gate).
+fn collect_unhealed(phases: &HashMap<JobId, JobPhase>) -> Vec<UnhealedDrift> {
+    let mut out: Vec<UnhealedDrift> = Vec::new();
+    for (id, phase) in phases {
+        let stuck = matches!(
+            phase,
+            JobPhase::Deadlettered | JobPhase::WaitingForOperator
+        );
+        if stuck {
+            out.push(UnhealedDrift {
+                job_id: id.clone(),
+                phase: phase.clone(),
+                age_seconds: 0,
+            });
+        }
+    }
+    // Stable order by stringified subject so receipts diff cleanly
+    // across ticks even though HashMap iteration is non-deterministic.
+    out.sort_by(|a, b| stable_job_key(&a.job_id).cmp(&stable_job_key(&b.job_id)));
+    out
+}
+
+fn stable_job_key(id: &JobId) -> String {
+    use shigoto_types::JobSubject;
+    let subject = match &id.subject {
+        JobSubject::None => String::new(),
+        JobSubject::Repo(r) => format!("repo:{r}"),
+        JobSubject::Org(o) => format!("org:{o}"),
+        JobSubject::Path(p) => format!("path:{}", p.display()),
+        JobSubject::Pinned(s) => format!("pin:{s}"),
+    };
+    format!("{}|{}", id.kind.0, subject)
+}
+
 fn phase_count_summary(phases: &HashMap<JobId, JobPhase>) -> std::collections::BTreeMap<String, u32> {
     let mut counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     for phase in phases.values() {
@@ -723,6 +767,50 @@ mod tests {
         // No registration!
         scheduler.tick(&mut dag).await.unwrap();
         assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
+    }
+
+    #[tokio::test]
+    async fn unhealed_in_receipt_lists_deadlettered_and_waiting() {
+        let scheduler = InProcessScheduler::new("test");
+
+        // One Deadlettered (FailJob with NoRetry default).
+        let dead = mk_id("test", "dead");
+        let mut dag = Dag::new();
+        dag.ensure_node(dead.clone());
+        scheduler.register_job(Arc::new(FailJob { id: dead.clone() })).await;
+
+        // One WaitingForOperator (seeded directly).
+        let waiting = mk_id("test", "waiting");
+        {
+            let mut state = scheduler.state.write().await;
+            state
+                .phases
+                .insert(waiting.clone(), JobPhase::WaitingForOperator);
+        }
+
+        // One Succeeded (OkJob).
+        let happy = mk_id("test", "happy");
+        dag.ensure_node(happy.clone());
+        scheduler.register_job(Arc::new(OkJob { id: happy.clone() })).await;
+
+        let receipt = scheduler.tick(&mut dag).await.unwrap();
+
+        // Deadlettered and WaitingForOperator surface; happy doesn't.
+        let unhealed_ids: Vec<&JobId> = receipt.unhealed.iter().map(|u| &u.job_id).collect();
+        assert_eq!(receipt.unhealed.len(), 2);
+        assert!(unhealed_ids.contains(&&dead));
+        assert!(unhealed_ids.contains(&&waiting));
+        assert!(!unhealed_ids.contains(&&happy));
+
+        // Deterministic order (sorted by stable job key).
+        let mut sorted_keys: Vec<String> = receipt
+            .unhealed
+            .iter()
+            .map(|u| stable_job_key(&u.job_id))
+            .collect();
+        let original_order = sorted_keys.clone();
+        sorted_keys.sort();
+        assert_eq!(sorted_keys, original_order);
     }
 
     #[tokio::test]
