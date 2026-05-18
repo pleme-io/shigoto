@@ -49,21 +49,39 @@ pub trait Scheduler: Send + Sync {
 /// Default scheduler — single-process, in-memory FSM state, sequential
 /// execution within a wave.
 ///
-/// v0.1 simplifying assumptions:
-/// - Gates: defaults to `GateAggregate::AllPassed`. Consumers extend
-///   by registering Gate impls (M0.9d).
-/// - Budget: every Ready job allocates successfully (no rate limit).
-///   M0.9d wires `BudgetTree`.
-/// - Retry: NoRetry by default. M0.9d wires `RetryPolicy`.
-/// - Timeout: per-job optional via `JobTimeoutPolicy`; otherwise none.
-/// - Cancellation: cooperative via a shared `tokio_util` token (not
-///   yet wired — future M0.9d).
-/// - Emitter: `NullEmitter` no-ops by default; tests can register
-///   `CapturingEmitter` to assert on transitions.
+/// What v0.1 wires:
+/// - Gates: implicit `AllUpstreamsTerminal` (DAG-edge enforcement)
+///   plus per-kind registry via `register_gate(kind, Arc<dyn Gate>)`.
+///   Multiple gates per kind reduce via `shigoto_gate::reduce`
+///   (worst-outcome wins). [M0.9g]
+/// - Retry: per-kind `RetryPolicy` via
+///   `register_retry_policy(kind, policy)`. Default is NoRetry —
+///   first failure → deadletter. NoRetry / Fixed / Exponential /
+///   Custom decider all supported. [M0.9h]
+/// - Budget: three-dimension envelope via `install_budget(tree)` —
+///   global × by-kind × by-scope, min-intersection. allocate on
+///   Ready→Running, release on Running→terminal. [M0.9j]
+/// - Emitter: `with_emitter(Arc<dyn TransitionEmitter>)` replaces
+///   the default NullEmitter. Every FSM transition + every operator
+///   action emits in real time. [M0.9d + M0.9l]
+/// - Timeout: optional per-job via `set_timeout(id, duration)`;
+///   wrapped around `execute()` with `tokio::time::timeout`.
 ///
-/// The load-bearing piece this v0.1 DOES enforce: the FSM table from
-/// `shigoto-types::advance`. Every phase change goes through it; the
-/// scheduler never invents transitions.
+/// What v0.1 doesn't yet wire:
+/// - Concurrency within a wave: jobs in the same wave run
+///   sequentially (each completes before the next starts). Real
+///   parallelism + cancellation-token plumbing land when a consumer
+///   needs them.
+/// - Persistence: in-memory only. A scheduler restart drops every
+///   non-terminal job back to Pending. Idempotent jobs tolerate
+///   this; persistence is a future Scheduler impl behind the trait.
+/// - Per-job age tracking: TickReceipt.unhealed entries have
+///   `age_seconds = 0`. Adding timestamps is a future M0.9 step.
+///
+/// The load-bearing invariant this v0.1 DOES enforce: every phase
+/// change goes through `shigoto-types::advance`. The scheduler
+/// never invents transitions. Compiler-checked exhaustiveness over
+/// JobPhase × Signal makes illegal transitions unrepresentable.
 pub struct InProcessScheduler {
     state: tokio::sync::RwLock<SchedulerState>,
     /// Budget allocation lives in its own Mutex (not the main state's
