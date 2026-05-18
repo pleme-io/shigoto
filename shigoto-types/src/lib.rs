@@ -350,6 +350,57 @@ pub struct Snapshot {
     pub phases: std::collections::HashMap<JobId, JobPhase>,
 }
 
+impl Snapshot {
+    /// Derived view: every job currently in {Failed, Retrying,
+    /// Deadlettered}. Per `theory/SHIGOTO.md` §VII.2 — broader than
+    /// `TickReceipt.unhealed` (which is just Deadlettered +
+    /// WaitingForOperator) because it includes the transient retry
+    /// states. Useful for debugging "what's currently failing across
+    /// the fleet?" without waiting for jobs to deadletter.
+    ///
+    /// Returns owned tuples (cloned JobId + phase) so consumers can
+    /// hold the result across snapshot drops.
+    #[must_use]
+    pub fn failure_set(&self) -> Vec<(JobId, JobPhase)> {
+        self.phases
+            .iter()
+            .filter(|(_, p)| {
+                matches!(
+                    p,
+                    JobPhase::Failed { .. }
+                        | JobPhase::Retrying { .. }
+                        | JobPhase::Deadlettered
+                )
+            })
+            .map(|(id, p)| (id.clone(), p.clone()))
+            .collect()
+    }
+
+    /// Count of jobs in each named phase. Stable ordering. Useful for
+    /// receipts + dashboards.
+    #[must_use]
+    pub fn phase_counts(&self) -> std::collections::BTreeMap<&'static str, u32> {
+        let mut counts: std::collections::BTreeMap<&'static str, u32> =
+            std::collections::BTreeMap::new();
+        for phase in self.phases.values() {
+            let key = match phase {
+                JobPhase::Pending => "pending",
+                JobPhase::Gated => "gated",
+                JobPhase::Ready => "ready",
+                JobPhase::Running => "running",
+                JobPhase::Succeeded => "succeeded",
+                JobPhase::Failed { .. } => "failed",
+                JobPhase::Retrying { .. } => "retrying",
+                JobPhase::Skipped(_) => "skipped",
+                JobPhase::Deadlettered => "deadlettered",
+                JobPhase::WaitingForOperator => "waiting-for-operator",
+            };
+            *counts.entry(key).or_insert(0) += 1;
+        }
+        counts
+    }
+}
+
 #[cfg(test)]
 mod fsm_tests {
     use super::*;
@@ -621,5 +672,73 @@ mod job_tests {
         let j: Box<dyn ErasedJob> = Box::new(NoopJob);
         assert_eq!(j.id().kind.0, "noop");
         assert!(j.execute_erased().await.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn id(name: &str) -> JobId {
+        JobId {
+            scope: JobScope::Global,
+            kind: JobKindId::new("k"),
+            subject: JobSubject::Pinned(name.into()),
+        }
+    }
+
+    fn snapshot_with(entries: Vec<(&str, JobPhase)>) -> Snapshot {
+        let mut phases: HashMap<JobId, JobPhase> = HashMap::new();
+        for (name, phase) in entries {
+            phases.insert(id(name), phase);
+        }
+        Snapshot { phases }
+    }
+
+    #[test]
+    fn failure_set_includes_failed_retrying_deadlettered() {
+        let s = snapshot_with(vec![
+            ("ok", JobPhase::Succeeded),
+            ("dead", JobPhase::Deadlettered),
+            ("flap", JobPhase::Failed { attempts: 2 }),
+            ("waiting", JobPhase::WaitingForOperator),
+            ("retry", JobPhase::Retrying { until_ms: 0 }),
+            ("ready", JobPhase::Ready),
+        ]);
+        let fs = s.failure_set();
+        let names: std::collections::HashSet<String> = fs
+            .iter()
+            .filter_map(|(id, _)| match &id.subject {
+                JobSubject::Pinned(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains("dead"));
+        assert!(names.contains("flap"));
+        assert!(names.contains("retry"));
+        // WaitingForOperator does NOT appear (it's unhealed, not
+        // a failure per §VII.2).
+        assert!(!names.contains("waiting"));
+        // Ok / Ready don't appear either.
+        assert!(!names.contains("ok"));
+        assert!(!names.contains("ready"));
+    }
+
+    #[test]
+    fn phase_counts_summarizes_every_phase() {
+        let s = snapshot_with(vec![
+            ("a", JobPhase::Pending),
+            ("b", JobPhase::Pending),
+            ("c", JobPhase::Succeeded),
+            ("d", JobPhase::Deadlettered),
+        ]);
+        let counts = s.phase_counts();
+        assert_eq!(counts.get("pending"), Some(&2));
+        assert_eq!(counts.get("succeeded"), Some(&1));
+        assert_eq!(counts.get("deadlettered"), Some(&1));
+        // Absent phases don't appear (no 0-counts).
+        assert!(counts.get("ready").is_none());
     }
 }
