@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use shigoto_budget::{BudgetError, BudgetTree};
 use shigoto_dag::Dag;
 use shigoto_emit::{NullEmitter, TransitionEmitter};
 use shigoto_gate::{self, AllUpstreamsTerminal, Gate, GateContext, GateOutcome};
@@ -63,6 +64,10 @@ pub trait Scheduler: Send + Sync {
 /// scheduler never invents transitions.
 pub struct InProcessScheduler {
     state: tokio::sync::RwLock<SchedulerState>,
+    /// Budget allocation lives in its own Mutex (not the main state's
+    /// RwLock) because allocate/release happen frequently and we want
+    /// fine-grained locking.
+    budget: tokio::sync::Mutex<BudgetTree>,
     tool: String,
     emitter: Arc<dyn TransitionEmitter>,
 }
@@ -107,9 +112,18 @@ impl InProcessScheduler {
                 attempts: HashMap::new(),
                 failure_history: HashMap::new(),
             }),
+            budget: tokio::sync::Mutex::new(BudgetTree::new()),
             tool: tool.into(),
             emitter: Arc::new(NullEmitter),
         }
+    }
+
+    /// Replace the default unbounded BudgetTree with a configured one.
+    /// The scheduler's Ready→Running transition becomes a real
+    /// allocation check; Running→terminal releases.
+    pub async fn install_budget(&self, budget: BudgetTree) {
+        let mut b = self.budget.lock().await;
+        *b = budget;
     }
 
     /// Register a Gate against a JobKind. Every job of that kind
@@ -280,8 +294,17 @@ impl InProcessScheduler {
                 Ok(true)
             }
 
-            // Budget allocation (v0.1: always succeeds).
+            // Budget allocation — try to reserve a slot across global
+            // × by-kind × by-scope. On Err we stay Ready; the next
+            // tick re-tries when another job has released a slot.
             JobPhase::Ready => {
+                let allocated = {
+                    let mut budget = self.budget.lock().await;
+                    budget.try_allocate(id).is_ok()
+                };
+                if !allocated {
+                    return Ok(false);
+                }
                 self.dispatch(id, Signal::AllocateBudget, transitions).await?;
                 Ok(true)
             }
@@ -437,9 +460,13 @@ impl InProcessScheduler {
                     .await?;
                 // Reset attempts on success (a future Pending recurrence
                 // is a fresh job lifecycle).
-                let mut state = self.state.write().await;
-                state.attempts.remove(id);
-                state.failure_history.remove(id);
+                {
+                    let mut state = self.state.write().await;
+                    state.attempts.remove(id);
+                    state.failure_history.remove(id);
+                }
+                // Release the budget slot acquired at Ready→Running.
+                self.budget.lock().await.release(id);
             }
             Err(()) => {
                 // Increment attempts + record failure BEFORE dispatching
@@ -467,6 +494,11 @@ impl InProcessScheduler {
                 }
                 self.dispatch(id, Signal::ExecutionFailed, transitions)
                     .await?;
+                // Release the budget slot acquired at Ready→Running.
+                // Even if the policy decides Retry, the slot returns
+                // to the pool — the retry's later Ready→Running will
+                // re-allocate.
+                self.budget.lock().await.release(id);
                 // The retry decision dispatch happens on the NEXT
                 // advance_once call (Failed → RetryDecide); this lets
                 // the per-job loop in tick() handle it uniformly.
@@ -648,6 +680,38 @@ mod tests {
         // No registration!
         scheduler.tick(&mut dag).await.unwrap();
         assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
+    }
+
+    #[tokio::test]
+    async fn budget_exhaustion_keeps_job_in_ready_phase() {
+        use shigoto_budget::{BudgetSpec, BudgetTree};
+
+        let scheduler = InProcessScheduler::new("test");
+
+        // Install a budget with global=1, pre-allocate that slot to a
+        // dummy JobId so the budget is exhausted when our real job
+        // tries to allocate.
+        let mut budget = BudgetTree::new();
+        budget.global = Some(BudgetSpec::max_concurrent(1));
+        let dummy = mk_id("test", "dummy-holder");
+        budget.try_allocate(&dummy).unwrap();
+        scheduler.install_budget(budget).await;
+
+        let id = mk_id("test", "want-budget");
+        let mut dag = Dag::new();
+        dag.ensure_node(id.clone());
+        scheduler.register_job(Arc::new(OkJob { id: id.clone() })).await;
+
+        // Tick: gate evaluates → Ready. Budget allocation fails → stay Ready.
+        scheduler.tick(&mut dag).await.unwrap();
+        assert_eq!(scheduler.phase_of(&id).await, JobPhase::Ready);
+
+        // Release the dummy holder's slot.
+        scheduler.budget.lock().await.release(&dummy);
+
+        // Tick: budget free → Ready → Running → Succeeded.
+        scheduler.tick(&mut dag).await.unwrap();
+        assert_eq!(scheduler.phase_of(&id).await, JobPhase::Succeeded);
     }
 
     #[tokio::test]
