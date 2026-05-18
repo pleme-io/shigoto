@@ -12,3 +12,4 @@ workspace = true
 
 [dependencies]
 shigoto-types.workspace = true
+shigoto-dag.workspace = true
