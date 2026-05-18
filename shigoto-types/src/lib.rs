@@ -234,6 +234,75 @@ pub trait JobInput: Send + Sync + 'static {}
 pub trait JobOutput: Send + Sync + 'static {}
 pub trait JobError: std::error::Error + Send + Sync + 'static {}
 
+/// The typed Job trait — what every consumer's domain-specific job
+/// implements. Per `theory/SHIGOTO.md` §III.1.
+///
+/// Constraints baked in:
+/// - `'static + Send + Sync` — jobs may move between scheduler threads.
+/// - Typed `Output` / `Error` — no untyped `Box<dyn Error>` in the
+///   business-logic surface. Erased dispatch is `ErasedJob`.
+/// - `execute` is async on tokio. Sync work uses `spawn_blocking`.
+/// - `id()` and `kind()` are pure: scheduler reads them many times
+///   per cycle; no IO.
+/// - `execute` MUST be idempotent (§IV.2). A scheduler that crashes
+///   between completing a side effect and emitting `Succeeded` will
+///   re-invoke execute on the next cycle.
+///
+/// v0.1 omits Input + JobContext — they land when a real consumer
+/// proves a need. For now: jobs hold their input in their own state
+/// (`self`) and the scheduler manages cancellation/clock externally
+/// (out-of-band via `tokio::time::timeout` + `CancellationToken`).
+#[async_trait::async_trait]
+pub trait Job: Send + Sync + 'static {
+    type Output: Send + 'static;
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Typed identity. Stable across cycles + scheduler restarts.
+    fn id(&self) -> JobId;
+
+    /// Typed work class.
+    fn kind(&self) -> JobKindId;
+
+    /// Side-effecting work. Called only on the `Ready → Running`
+    /// transition (`Signal::AllocateBudget` → `advance` → Running).
+    /// MUST be idempotent.
+    async fn execute(&self) -> Result<Self::Output, Self::Error>;
+}
+
+/// Trait-object dispatch surface. The scheduler holds
+/// `Box<dyn ErasedJob>` (`Job` itself isn't object-safe because of
+/// the associated types); `ErasedJob` collapses the typed Output +
+/// Error to `()` + boxed error so the scheduler can store
+/// heterogeneous jobs in one DAG.
+///
+/// Blanket impl below gives every `T: Job` an `ErasedJob` view for
+/// free — consumers write `impl Job for MyJob` and the scheduler
+/// consumes it via `Box<dyn ErasedJob>` automatically.
+#[async_trait::async_trait]
+pub trait ErasedJob: Send + Sync + 'static {
+    fn id(&self) -> JobId;
+    fn kind(&self) -> JobKindId;
+    async fn execute_erased(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+}
+
+#[async_trait::async_trait]
+impl<T: Job> ErasedJob for T {
+    fn id(&self) -> JobId {
+        <T as Job>::id(self)
+    }
+
+    fn kind(&self) -> JobKindId {
+        <T as Job>::kind(self)
+    }
+
+    async fn execute_erased(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        match <T as Job>::execute(self).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(Box::new(e)),
+        }
+    }
+}
+
 /// Derived per-tick rollup the scheduler emits on every `tick`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TickReceipt {
@@ -502,5 +571,55 @@ mod fsm_tests {
         assert!(Signal::OperatorTransition(JobPhase::Pending).is_operator_driven());
         assert!(!Signal::AllocateBudget.is_operator_driven());
         assert!(!pass().is_operator_driven());
+    }
+}
+
+#[cfg(test)]
+mod job_tests {
+    use super::*;
+
+    /// Sample Job impl — a no-op that succeeds. Verifies the trait
+    /// shape compiles + the ErasedJob blanket impl gives us
+    /// trait-object dispatch.
+    struct NoopJob;
+
+    #[derive(thiserror::Error, Debug)]
+    #[error("noop")]
+    struct NoopError;
+
+    #[async_trait::async_trait]
+    impl Job for NoopJob {
+        type Output = ();
+        type Error = NoopError;
+
+        fn id(&self) -> JobId {
+            JobId {
+                scope: JobScope::Global,
+                kind: JobKindId::new("noop"),
+                subject: JobSubject::None,
+            }
+        }
+
+        fn kind(&self) -> JobKindId {
+            JobKindId::new("noop")
+        }
+
+        async fn execute(&self) -> Result<(), NoopError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn job_trait_compiles_and_executes() {
+        let j = NoopJob;
+        assert_eq!(<NoopJob as Job>::id(&j).kind.0, "noop");
+        assert!(j.execute().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn erased_job_blanket_impl_gives_trait_object() {
+        let j: Box<dyn ErasedJob> = Box::new(NoopJob);
+        assert_eq!(j.id().kind.0, "noop");
+        assert!(j.execute_erased().await.is_ok());
     }
 }

@@ -17,3 +17,6 @@ schemars.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
