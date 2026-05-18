@@ -173,24 +173,41 @@ impl InProcessScheduler {
 
     /// External operator transition. Constrained to the three legal
     /// targets per `shigoto_types::advance` — calls that violate the
-    /// FSM return `IllegalTransition`.
+    /// FSM return `IllegalTransition`. The transition emits through
+    /// the registered TransitionEmitter immediately (operator actions
+    /// are auditable in real time, not deferred to the next tick).
     pub async fn operator_transition(
         &self,
         id: &JobId,
         target: JobPhase,
         reason: TransitionReason,
     ) -> Result<(), SchedulerError> {
-        let mut state = self.state.write().await;
-        let from = state
-            .phases
-            .get(id)
-            .cloned()
-            .unwrap_or(JobPhase::Pending);
-        let new = advance(from.clone(), Signal::OperatorTransition(target))?;
-        state.phases.insert(id.clone(), new);
-        // Emission of operator transitions is handled by the next tick
-        // (we want every emit to flow through the same path).
-        let _ = reason;
+        let from = {
+            let state = self.state.read().await;
+            state.phases.get(id).cloned().unwrap_or(JobPhase::Pending)
+        };
+        let signal = Signal::OperatorTransition(target);
+        let to = advance(from.clone(), signal.clone())?;
+
+        // Mutate the phase map.
+        {
+            let mut state = self.state.write().await;
+            state.phases.insert(id.clone(), to.clone());
+        }
+
+        // Emit the transition with the operator-supplied reason
+        // (overrides the default reason_from(signal) which would just
+        // produce "manual transition"). Audit log + observability
+        // sinks see operator context immediately.
+        let event = TransitionEvent {
+            at: chrono::Utc::now(),
+            job_id: id.clone(),
+            from,
+            to,
+            reason,
+            tool: self.tool.clone(),
+        };
+        self.emitter.emit(event);
         Ok(())
     }
 }
@@ -655,7 +672,21 @@ mod tests {
 
     #[tokio::test]
     async fn operator_transition_advances_waiting_for_operator() {
-        let scheduler = InProcessScheduler::new("test");
+        use shigoto_emit::TransitionEmitter;
+        use std::sync::Mutex;
+
+        struct Capture {
+            log: Arc<Mutex<Vec<TransitionEvent>>>,
+        }
+        impl TransitionEmitter for Capture {
+            fn emit(&self, event: TransitionEvent) {
+                self.log.lock().unwrap().push(event);
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let scheduler = InProcessScheduler::new("test")
+            .with_emitter(Arc::new(Capture { log: log.clone() }));
         let id = mk_id("test", "manual");
         // Seed the phase to WaitingForOperator manually.
         {
@@ -663,10 +694,24 @@ mod tests {
             state.phases.insert(id.clone(), JobPhase::WaitingForOperator);
         }
         scheduler
-            .operator_transition(&id, JobPhase::Ready, TransitionReason::OperatorAction("go".into()))
+            .operator_transition(
+                &id,
+                JobPhase::Ready,
+                TransitionReason::OperatorAction("go".into()),
+            )
             .await
             .unwrap();
         assert_eq!(scheduler.phase_of(&id).await, JobPhase::Ready);
+
+        // Operator action emits immediately (not deferred to next tick).
+        let captured = log.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].from, JobPhase::WaitingForOperator);
+        assert_eq!(captured[0].to, JobPhase::Ready);
+        assert!(matches!(
+            &captured[0].reason,
+            TransitionReason::OperatorAction(s) if s == "go"
+        ));
     }
 
     #[tokio::test]
