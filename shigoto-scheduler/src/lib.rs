@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use shigoto_dag::Dag;
 use shigoto_emit::{NullEmitter, TransitionEmitter};
 use shigoto_gate::{self, AllUpstreamsTerminal, Gate, GateContext, GateOutcome};
+use shigoto_retry::{FailureRecord, RetryDecision, RetryPolicy};
 use shigoto_types::{
     advance, ErasedJob, GateAggregate, IllegalTransition, JobId, JobKindId, JobPhase, RetryOutcome,
     Signal, Snapshot, TickReceipt, TransitionEvent, TransitionReason,
@@ -75,6 +76,19 @@ struct SchedulerState {
     /// `gates[K]` (plus the implicit AllUpstreamsTerminal) during
     /// gate evaluation. Empty vec means "no kind-specific gates."
     gates: HashMap<JobKindId, Vec<Arc<dyn Gate>>>,
+    /// Per-kind retry policy. Default is `NoRetry` — deadletter on
+    /// first failure. Consumers register Fixed / Exponential /
+    /// Custom policies per kind.
+    retry_policies: HashMap<JobKindId, RetryPolicy>,
+    /// Authoritative attempt counter per job. JobPhase::Failed's
+    /// `attempts` field carries the count for serialization but the
+    /// scheduler reads this map for decisions because the FSM v0.1
+    /// doesn't thread attempts across the Retrying→Pending→Ready→
+    /// Running cycle. Incremented on every ExecutionFailed dispatch;
+    /// reset when the job reaches Succeeded.
+    attempts: HashMap<JobId, u32>,
+    /// Per-job failure history (capped) — passed to RetryDecider.
+    failure_history: HashMap<JobId, Vec<FailureRecord>>,
 }
 
 impl InProcessScheduler {
@@ -89,6 +103,9 @@ impl InProcessScheduler {
                 jobs: HashMap::new(),
                 timeouts: HashMap::new(),
                 gates: HashMap::new(),
+                retry_policies: HashMap::new(),
+                attempts: HashMap::new(),
+                failure_history: HashMap::new(),
             }),
             tool: tool.into(),
             emitter: Arc::new(NullEmitter),
@@ -102,6 +119,15 @@ impl InProcessScheduler {
     pub async fn register_gate(&self, kind: JobKindId, gate: Arc<dyn Gate>) {
         let mut state = self.state.write().await;
         state.gates.entry(kind).or_default().push(gate);
+    }
+
+    /// Register a RetryPolicy against a JobKind. On every Failed
+    /// transition for a job of that kind, the scheduler calls
+    /// `policy.decide(attempt, history)` to decide retry vs deadletter.
+    /// Default (no registration) is `NoRetry`.
+    pub async fn register_retry_policy(&self, kind: JobKindId, policy: RetryPolicy) {
+        let mut state = self.state.write().await;
+        state.retry_policies.insert(kind, policy);
     }
 
     /// Replace the default `NullEmitter` with a real sink — typically
@@ -227,7 +253,7 @@ impl InProcessScheduler {
             // Gate evaluation — implicit AllUpstreamsTerminal + per-kind
             // consumer-registered gates, reduced to a GateAggregate
             // and dispatched via Signal::EvaluateGates.
-            JobPhase::Pending | JobPhase::Gated | JobPhase::Retrying { .. } => {
+            JobPhase::Pending | JobPhase::Gated => {
                 let aggregate = self.evaluate_gates(id, dag).await;
                 // If the aggregate is SomeWaiting AND we're already
                 // Gated, no useful transition fires (Gated → Gated is
@@ -240,6 +266,17 @@ impl InProcessScheduler {
                 }
                 self.dispatch(id, Signal::EvaluateGates(aggregate), transitions)
                     .await?;
+                Ok(true)
+            }
+
+            // Retrying: wait for the backoff window to elapse, then
+            // BackoffElapsed → Pending (cycle restart).
+            JobPhase::Retrying { until_ms } => {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                if now_ms < *until_ms {
+                    return Ok(false);
+                }
+                self.dispatch(id, Signal::BackoffElapsed, transitions).await?;
                 Ok(true)
             }
 
@@ -257,15 +294,40 @@ impl InProcessScheduler {
                 Ok(true)
             }
 
-            // Failed → retry decision (v0.1: NoRetry → Deadletter).
+            // Failed → retry decision via registered RetryPolicy.
             JobPhase::Failed { .. } => {
-                self.dispatch(
-                    id,
-                    Signal::RetryDecide(RetryOutcome::Deadletter),
-                    transitions,
-                )
-                .await?;
+                let outcome = self.decide_retry(id).await;
+                self.dispatch(id, Signal::RetryDecide(outcome), transitions).await?;
                 Ok(true)
+            }
+        }
+    }
+
+    /// Consult the registered RetryPolicy for the job's kind, decide
+    /// Retry { until_ms } vs Deadletter. Default is NoRetry when no
+    /// policy is registered.
+    async fn decide_retry(&self, id: &JobId) -> RetryOutcome {
+        let (policy, attempt, history) = {
+            let state = self.state.read().await;
+            let policy = state
+                .retry_policies
+                .get(&id.kind)
+                .cloned()
+                .unwrap_or(RetryPolicy::NoRetry);
+            let attempt = state.attempts.get(id).copied().unwrap_or(1);
+            let history = state
+                .failure_history
+                .get(id)
+                .cloned()
+                .unwrap_or_default();
+            (policy, attempt, history)
+        };
+        match policy.decide(attempt, &history) {
+            RetryDecision::Deadletter => RetryOutcome::Deadletter,
+            RetryDecision::Retry { after } => {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let until_ms = now_ms + after.as_millis() as i64;
+                RetryOutcome::Retry { until_ms }
             }
         }
     }
@@ -373,17 +435,41 @@ impl InProcessScheduler {
             Ok(()) => {
                 self.dispatch(id, Signal::ExecutionSucceeded, transitions)
                     .await?;
+                // Reset attempts on success (a future Pending recurrence
+                // is a fresh job lifecycle).
+                let mut state = self.state.write().await;
+                state.attempts.remove(id);
+                state.failure_history.remove(id);
             }
             Err(()) => {
+                // Increment attempts + record failure BEFORE dispatching
+                // ExecutionFailed so the FSM state and the side maps
+                // stay in lockstep.
+                {
+                    let mut state = self.state.write().await;
+                    let entry = state.attempts.entry(id.clone()).or_insert(0);
+                    *entry += 1;
+                    let attempt = *entry;
+                    let history = state
+                        .failure_history
+                        .entry(id.clone())
+                        .or_insert_with(Vec::new);
+                    history.push(FailureRecord {
+                        attempt,
+                        at_ms: chrono::Utc::now().timestamp_millis(),
+                        error: "execute() returned Err".into(),
+                    });
+                    // Cap history to last 16 entries — bounded memory.
+                    if history.len() > 16 {
+                        let drop_n = history.len() - 16;
+                        history.drain(0..drop_n);
+                    }
+                }
                 self.dispatch(id, Signal::ExecutionFailed, transitions)
                     .await?;
-                // v0.1 NoRetry: deadletter on first failure.
-                self.dispatch(
-                    id,
-                    Signal::RetryDecide(RetryOutcome::Deadletter),
-                    transitions,
-                )
-                .await?;
+                // The retry decision dispatch happens on the NEXT
+                // advance_once call (Failed → RetryDecide); this lets
+                // the per-job loop in tick() handle it uniformly.
             }
         }
 
@@ -562,6 +648,48 @@ mod tests {
         // No registration!
         scheduler.tick(&mut dag).await.unwrap();
         assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
+    }
+
+    #[tokio::test]
+    async fn registered_retry_policy_retries_then_deadletters() {
+        use shigoto_retry::RetryPolicy;
+
+        let scheduler = InProcessScheduler::new("test");
+        let kind = JobKindId::new("test");
+        // Three attempts allowed; zero delay so we can pump ticks fast.
+        scheduler
+            .register_retry_policy(
+                kind.clone(),
+                RetryPolicy::Fixed {
+                    attempts: 3,
+                    delay_ms: 0,
+                },
+            )
+            .await;
+
+        let id = mk_id("test", "always-fails");
+        let mut dag = Dag::new();
+        dag.ensure_node(id.clone());
+        scheduler
+            .register_job(Arc::new(FailJob { id: id.clone() }))
+            .await;
+
+        // Pump ticks until the job reaches a terminal phase or we hit
+        // the safety cap. With Fixed(3, 0) the job should deadletter
+        // after 3 attempts (~3 ticks; each tick advances the loop by
+        // up to 6 phase changes which is one full retry cycle).
+        for _ in 0..8 {
+            scheduler.tick(&mut dag).await.unwrap();
+            if scheduler.phase_of(&id).await == JobPhase::Deadlettered {
+                break;
+            }
+        }
+        assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
+
+        // Authoritative attempt count should be the retry limit.
+        let state = scheduler.state.read().await;
+        assert_eq!(state.attempts.get(&id).copied(), Some(3));
+        assert_eq!(state.failure_history.get(&id).map(Vec::len), Some(3));
     }
 
     #[tokio::test]
