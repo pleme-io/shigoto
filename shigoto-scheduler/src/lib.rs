@@ -38,8 +38,10 @@ pub trait Scheduler: Send + Sync {
     /// Drive the Dag one tick forward.
     async fn tick(&self, dag: &mut Dag) -> Result<TickReceipt, SchedulerError>;
 
-    /// Read-only snapshot of the current FSM map.
-    fn snapshot(&self, dag: &Dag) -> Snapshot;
+    /// Read-only snapshot of the current FSM map. Async because the
+    /// state lives behind a tokio RwLock; bridging via block_in_place
+    /// would panic outside a tokio runtime context.
+    async fn snapshot(&self, dag: &Dag) -> Snapshot;
 }
 
 // ── InProcessScheduler ───────────────────────────────────────────────
@@ -237,12 +239,8 @@ impl Scheduler for InProcessScheduler {
         })
     }
 
-    fn snapshot(&self, _dag: &Dag) -> Snapshot {
-        // Trait method is sync; wrap the async lock. This is only
-        // called by consumers outside the tick loop.
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.snapshot_inner())
-        })
+    async fn snapshot(&self, _dag: &Dag) -> Snapshot {
+        self.snapshot_inner().await
     }
 }
 
