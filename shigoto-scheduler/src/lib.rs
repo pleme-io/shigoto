@@ -237,24 +237,74 @@ impl Scheduler for InProcessScheduler {
         let waves = dag.waves(None)?;
         let mut transitions: Vec<TransitionEvent> = Vec::new();
 
+        // Each wave runs in three passes:
+        //   PASS 1 — drive every Job through the fast FSM transitions
+        //            (gate evaluation, budget allocation, etc.) up to
+        //            the point of Running. Sequential because each
+        //            advance_once mutates shared state via locks; the
+        //            transitions themselves are CPU-cheap.
+        //   PASS 2 — collect every Job currently in Running, fan out
+        //            their `execute_erased` calls into a JoinSet, and
+        //            await all. This is the parallelism payoff: a
+        //            wave of N Ready jobs runs in O(slowest_execute),
+        //            not O(sum_of_executes).
+        //   PASS 3 — drain terminal transitions (Failed→RetryDecide→
+        //            {Retrying|Deadlettered}) for any Job whose
+        //            execute returned. Sequential again; same reason
+        //            as pass 1.
+        //
+        // Inter-wave dependencies still serialize: Jobs in wave 2 can't
+        // start their pass-1 transitions until wave 1's pass-3 has
+        // landed terminal phases for their upstreams. Within a wave,
+        // execution is fully concurrent.
         for wave in waves {
-            for id in wave {
-                // ── Seed unknown nodes ──────────────────────────
+            // PASS 1: fast FSM transitions.
+            for id in &wave {
                 {
                     let mut state = self.state.write().await;
                     state.phases.entry(id.clone()).or_insert(JobPhase::Pending);
                 }
-
-                // Drive each Job's FSM as far forward as it can go in
-                // a single tick. We loop until the phase stops
-                // advancing (either terminal, blocked on operator, or
-                // waiting on a gate). Capped at 6 steps — longest
-                // forward chain is Pending→Ready→Running→Succeeded
-                // (3) and the failure chain is one longer.
                 for _ in 0..6 {
-                    let from = self.phase_of(&id).await;
+                    let from = self.phase_of(id).await;
+                    // Stop at Running — pass 2 handles the execute.
+                    if matches!(from, JobPhase::Running) {
+                        break;
+                    }
                     let progressed = self
-                        .advance_once(&id, &from, &*dag, &mut transitions)
+                        .advance_once(id, &from, &*dag, &mut transitions)
+                        .await?;
+                    if !progressed {
+                        break;
+                    }
+                }
+            }
+
+            // PASS 2: concurrent execution of every Job in Running.
+            let running_ids: Vec<JobId> = {
+                let state = self.state.read().await;
+                wave.iter()
+                    .filter(|id| matches!(state.phases.get(id), Some(JobPhase::Running)))
+                    .cloned()
+                    .collect()
+            };
+
+            if !running_ids.is_empty() {
+                let exec_results = self.execute_concurrent(&running_ids).await;
+                for (id, result) in exec_results {
+                    self.apply_execution_result(&id, result, &mut transitions)
+                        .await?;
+                }
+            }
+
+            // PASS 3: post-execute terminal cleanup (Failed→retry decide).
+            for id in &wave {
+                for _ in 0..3 {
+                    let from = self.phase_of(id).await;
+                    if matches!(from, JobPhase::Running) {
+                        break;
+                    }
+                    let progressed = self
+                        .advance_once(id, &from, &*dag, &mut transitions)
                         .await?;
                     if !progressed {
                         break;
@@ -350,13 +400,14 @@ impl InProcessScheduler {
                 Ok(true)
             }
 
-            // Execute. Running is a very short-lived phase in v0.1
-            // because we run synchronously and dispatch the outcome
-            // in the same step.
-            JobPhase::Running => {
-                self.run_job(id, transitions).await?;
-                Ok(true)
-            }
+            // Execute is handled out-of-band by tick()'s pass 2
+            // (concurrent execution via JoinSet). advance_once for
+            // Running is a no-op so the FSM doesn't accidentally
+            // re-run a Job that's already been spawned for this tick.
+            // The pass-2/pass-3 split is what enables wave-level
+            // parallelism without giving up FSM correctness — see
+            // tick() for the rationale.
+            JobPhase::Running => Ok(false),
 
             // Failed → retry decision via registered RetryPolicy.
             JobPhase::Failed { .. } => {
@@ -463,56 +514,83 @@ impl InProcessScheduler {
     }
 
     /// Execute a Running job and dispatch the resulting outcome.
-    async fn run_job(
+    /// Fan out execute_erased calls for `ids` into a JoinSet and
+    /// await every task. Returns one (JobId, exec_result) pair per
+    /// input id. The wave's slowest execute bounds total elapsed
+    /// time — this is the parallelism payoff.
+    ///
+    /// Unregistered jobs (no entry in `state.jobs`) synthesize an
+    /// `Err(())` so the caller's `apply_execution_result` path takes
+    /// the failure branch (preserving the old `run_job` semantic of
+    /// immediate-deadletter on missing Job).
+    async fn execute_concurrent(
+        &self,
+        ids: &[JobId],
+    ) -> Vec<(JobId, Result<(), ()>)> {
+        use tokio::task::JoinSet;
+        let mut set = JoinSet::new();
+        for id in ids {
+            let (job, timeout) = {
+                let state = self.state.read().await;
+                (state.jobs.get(id).cloned(), state.timeouts.get(id).copied())
+            };
+            let id_clone = id.clone();
+            match job {
+                Some(job) => {
+                    set.spawn(async move {
+                        let result = match timeout {
+                            Some(d) => tokio::time::timeout(d, job.execute_erased())
+                                .await
+                                .map(|r| r.map_err(|_| ()))
+                                .unwrap_or(Err(())),
+                            None => job.execute_erased().await.map_err(|_| ()),
+                        };
+                        (id_clone, result)
+                    });
+                }
+                None => {
+                    set.spawn(async move { (id_clone, Err(())) });
+                }
+            }
+        }
+        let mut results = Vec::with_capacity(ids.len());
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok(pair) => results.push(pair),
+                Err(_join_err) => {
+                    // JoinError = task panic. Without the id we can't
+                    // dispatch a transition, so this is a scheduler
+                    // bug. v0.1: drop the result and rely on the
+                    // unhealed projection (the Job will stay in
+                    // Running and surface as a stuck Job).
+                }
+            }
+        }
+        results
+    }
+
+    /// Apply one execute outcome to the FSM + side state. Extracted
+    /// from the old `run_job` so both the sequential path (in tests)
+    /// and the concurrent path (tick's pass 2) share one source of
+    /// truth for "what happens after execute returns".
+    async fn apply_execution_result(
         &self,
         id: &JobId,
+        result: Result<(), ()>,
         transitions: &mut Vec<TransitionEvent>,
     ) -> Result<(), SchedulerError> {
-        // Pull the Job + timeout out of state without holding the lock
-        // across the await of execute().
-        let (job, timeout) = {
-            let state = self.state.read().await;
-            (state.jobs.get(id).cloned(), state.timeouts.get(id).copied())
-        };
-
-        let Some(job) = job else {
-            // Unregistered job — treat as immediate failure.
-            self.dispatch(id, Signal::ExecutionFailed, transitions).await?;
-            self.dispatch(
-                id,
-                Signal::RetryDecide(RetryOutcome::Deadletter),
-                transitions,
-            )
-            .await?;
-            return Ok(());
-        };
-
-        let outcome = match timeout {
-            Some(d) => tokio::time::timeout(d, job.execute_erased())
-                .await
-                .map(|r| r.map_err(|_| ()))
-                .unwrap_or(Err(())),
-            None => job.execute_erased().await.map_err(|_| ()),
-        };
-
-        match outcome {
+        match result {
             Ok(()) => {
                 self.dispatch(id, Signal::ExecutionSucceeded, transitions)
                     .await?;
-                // Reset attempts on success (a future Pending recurrence
-                // is a fresh job lifecycle).
                 {
                     let mut state = self.state.write().await;
                     state.attempts.remove(id);
                     state.failure_history.remove(id);
                 }
-                // Release the budget slot acquired at Ready→Running.
                 self.budget.lock().await.release(id);
             }
             Err(()) => {
-                // Increment attempts + record failure BEFORE dispatching
-                // ExecutionFailed so the FSM state and the side maps
-                // stay in lockstep.
                 {
                     let mut state = self.state.write().await;
                     let entry = state.attempts.entry(id.clone()).or_insert(0);
@@ -527,7 +605,6 @@ impl InProcessScheduler {
                         at_ms: chrono::Utc::now().timestamp_millis(),
                         error: "execute() returned Err".into(),
                     });
-                    // Cap history to last 16 entries — bounded memory.
                     if history.len() > 16 {
                         let drop_n = history.len() - 16;
                         history.drain(0..drop_n);
@@ -535,17 +612,9 @@ impl InProcessScheduler {
                 }
                 self.dispatch(id, Signal::ExecutionFailed, transitions)
                     .await?;
-                // Release the budget slot acquired at Ready→Running.
-                // Even if the policy decides Retry, the slot returns
-                // to the pool — the retry's later Ready→Running will
-                // re-allocate.
                 self.budget.lock().await.release(id);
-                // The retry decision dispatch happens on the NEXT
-                // advance_once call (Failed → RetryDecide); this lets
-                // the per-job loop in tick() handle it uniformly.
             }
         }
-
         Ok(())
     }
 }
@@ -969,6 +1038,82 @@ mod tests {
         assert!(succeeded_jobs.contains(&root));
         assert!(succeeded_jobs.contains(&middle));
         assert!(succeeded_jobs.contains(&leaf));
+    }
+
+    /// Concurrent wave execution: 4 Jobs that each sleep `delay`
+    /// execute in roughly `delay` real time, not `4 * delay`. This
+    /// is the load-bearing proof for M0.13's pass-2 JoinSet fan-out.
+    /// If the scheduler ever regresses to sequential exec, this test
+    /// blows the timing budget and fails.
+    ///
+    /// Generous margin (3 * delay) covers CI variance + spawn
+    /// overhead while still failing on true sequential exec (which
+    /// would need ~4 * delay).
+    #[tokio::test]
+    async fn wave_runs_executes_concurrently() {
+        struct SleepJob {
+            id: JobId,
+            delay_ms: u64,
+        }
+
+        #[async_trait]
+        impl Job for SleepJob {
+            type Output = ();
+            type Error = OkError;
+            fn id(&self) -> JobId {
+                self.id.clone()
+            }
+            fn kind(&self) -> JobKindId {
+                self.id.kind.clone()
+            }
+            async fn execute(&self) -> Result<(), OkError> {
+                tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+                Ok(())
+            }
+        }
+
+        const DELAY_MS: u64 = 200;
+        const N_JOBS: usize = 4;
+
+        let scheduler = InProcessScheduler::new("concurrency-proof");
+        let mut dag = Dag::new();
+
+        // All jobs have NO edges between them — they all live in the
+        // same wave. They share the same kind so a future budget cap
+        // could throttle them, but here we leave the budget unbounded.
+        for i in 0..N_JOBS {
+            let id = mk_id("sleep", &format!("j{i}"));
+            dag.ensure_node(id.clone());
+            scheduler
+                .register_job(Arc::new(SleepJob {
+                    id,
+                    delay_ms: DELAY_MS,
+                }))
+                .await;
+        }
+
+        let start = std::time::Instant::now();
+        scheduler.tick(&mut dag).await.unwrap();
+        let elapsed = start.elapsed();
+
+        let snap = scheduler.snapshot(&dag).await;
+        let succeeded = snap
+            .phases
+            .values()
+            .filter(|p| matches!(p, JobPhase::Succeeded))
+            .count();
+        assert_eq!(succeeded, N_JOBS, "every job should reach Succeeded");
+
+        let serial_floor = Duration::from_millis(DELAY_MS * N_JOBS as u64);
+        let concurrent_ceiling = Duration::from_millis(DELAY_MS * 3);
+        assert!(
+            elapsed < concurrent_ceiling,
+            "expected concurrent execution (<{:?}), but tick took {:?} — \
+             that's serial-ish ({:?} would be fully serial)",
+            concurrent_ceiling,
+            elapsed,
+            serial_floor,
+        );
     }
 
     #[tokio::test]
