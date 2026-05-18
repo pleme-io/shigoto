@@ -196,7 +196,7 @@ pub fn advance(from: JobPhase, signal: Signal) -> Result<JobPhase, IllegalTransi
         (JobPhase::Running, Timeout) => JobPhase::Failed { attempts: 1 },
 
         // ── Failed waits for the retry policy's decision ───────
-        (JobPhase::Failed { attempts }, RetryDecide(RetryOutcome::Retry { until_ms })) => {
+        (JobPhase::Failed { attempts: _ }, RetryDecide(RetryOutcome::Retry { until_ms })) => {
             JobPhase::Retrying {
                 until_ms: *until_ms,
             }

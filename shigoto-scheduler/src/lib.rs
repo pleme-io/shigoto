@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use shigoto_budget::{BudgetError, BudgetTree};
+use shigoto_budget::BudgetTree;
 use shigoto_dag::Dag;
 use shigoto_emit::{NullEmitter, TransitionEmitter};
 use shigoto_gate::{self, AllUpstreamsTerminal, Gate, GateContext, GateOutcome};
@@ -246,7 +246,14 @@ impl Scheduler for InProcessScheduler {
         }
 
         let snapshot = self.snapshot_inner().await;
-        let phase_counts = phase_count_summary(&snapshot.phases);
+        // Use Snapshot's typed projection (one canonical key set).
+        // BTreeMap<&'static str, u32> → BTreeMap<String, u32> for
+        // TickReceipt's owned-string surface.
+        let phase_counts = snapshot
+            .phase_counts()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
         let unhealed = collect_unhealed(&snapshot.phases);
 
         Ok(TickReceipt {
@@ -566,26 +573,6 @@ fn stable_job_key(id: &JobId) -> String {
         JobSubject::Pinned(s) => format!("pin:{s}"),
     };
     format!("{}|{}", id.kind.0, subject)
-}
-
-fn phase_count_summary(phases: &HashMap<JobId, JobPhase>) -> std::collections::BTreeMap<String, u32> {
-    let mut counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
-    for phase in phases.values() {
-        let key = match phase {
-            JobPhase::Pending => "pending",
-            JobPhase::Gated => "gated",
-            JobPhase::Ready => "ready",
-            JobPhase::Running => "running",
-            JobPhase::Succeeded => "succeeded",
-            JobPhase::Failed { .. } => "failed",
-            JobPhase::Retrying { .. } => "retrying",
-            JobPhase::Skipped(_) => "skipped",
-            JobPhase::Deadlettered => "deadlettered",
-            JobPhase::WaitingForOperator => "waiting-for-operator",
-        };
-        *counts.entry(key.to_string()).or_insert(0) += 1;
-    }
-    counts
 }
 
 fn reason_from(signal: &Signal) -> TransitionReason {
