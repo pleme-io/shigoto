@@ -1,0 +1,25 @@
+[package]
+name = "shigoto-scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "shigoto — Scheduler trait + InProcessScheduler. One tick per call; daemons loop, K8s reconcilers map CR events to ticks."
+
+[lints]
+workspace = true
+
+[dependencies]
+shigoto-types.workspace = true
+shigoto-dag.workspace = true
+shigoto-budget.workspace = true
+shigoto-retry.workspace = true
+shigoto-gate.workspace = true
+shigoto-emit.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true

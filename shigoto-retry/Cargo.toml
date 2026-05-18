@@ -1,0 +1,15 @@
+[package]
+name = "shigoto-retry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "shigoto — typed retry policies + backoff strategies + RetryDecider trait."
+
+[lints]
+workspace = true
+
+[dependencies]
+shigoto-types.workspace = true
+serde.workspace = true

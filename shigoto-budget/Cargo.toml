@@ -1,0 +1,16 @@
+[package]
+name = "shigoto-budget"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "shigoto — typed parallelism budget tree (global × by-kind × by-scope, min-intersection)."
+
+[lints]
+workspace = true
+
+[dependencies]
+shigoto-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = ["shigoto", "shigoto-types", "shigoto-dag", "shigoto-scheduler", "shigoto-budget", "shigoto-retry", "shigoto-gate", "shigoto-emit", "shigoto-test"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+license = "MIT"
+repository = "https://github.com/pleme-io/shigoto"
+authors = ["pleme-io"]
+
+[workspace.dependencies]
+shigoto = { path = "shigoto" }
+shigoto-types = { path = "shigoto-types" }
+shigoto-dag = { path = "shigoto-dag" }
+shigoto-scheduler = { path = "shigoto-scheduler" }
+shigoto-budget = { path = "shigoto-budget" }
+shigoto-retry = { path = "shigoto-retry" }
+shigoto-gate = { path = "shigoto-gate" }
+shigoto-emit = { path = "shigoto-emit" }
+shigoto-test = { path = "shigoto-test" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+schemars = { version = "0.8", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = { version = "0.1" }
+thiserror = { version = "2" }
+petgraph = { version = "0.6" }
+tracing = { version = "0.1" }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = { version = "1" }
+
+[workspace.lints]
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+
+[profile]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true

@@ -1,0 +1,17 @@
+[package]
+name = "shigoto-dag"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "shigoto — typed DAG of Jobs (petgraph + topological waves)."
+
+[lints]
+workspace = true
+
+[dependencies]
+shigoto-types.workspace = true
+petgraph.workspace = true
+thiserror.workspace = true
+serde.workspace = true

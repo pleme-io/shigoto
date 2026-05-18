@@ -1,0 +1,17 @@
+[package]
+name = "shigoto-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "shigoto — test helpers (idempotence proptest harness, golden tests, in-memory scheduler fixtures)."
+
+[lints]
+workspace = true
+
+[dependencies]
+shigoto-types.workspace = true
+shigoto-scheduler.workspace = true
+tokio.workspace = true
+async-trait.workspace = true

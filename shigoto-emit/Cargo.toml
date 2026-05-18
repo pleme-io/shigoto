@@ -1,0 +1,17 @@
+[package]
+name = "shigoto-emit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "shigoto — typed TransitionEmitter trait + sinks (AuditFileEmitter, NatsEmitter, MultiEmitter)."
+
+[lints]
+workspace = true
+
+[dependencies]
+shigoto-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
