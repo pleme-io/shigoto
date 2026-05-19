@@ -600,11 +600,21 @@ impl InProcessScheduler {
                         .failure_history
                         .entry(id.clone())
                         .or_insert_with(Vec::new);
-                    history.push(FailureRecord {
+                    // Scheduler doesn't classify here — the job's
+                    // execute() result returned anyhow::Error but the
+                    // scheduler treats it as opaque. Daemons that
+                    // know their failure kind should classify via
+                    // `shigoto-types::Failure::from_raw(&err.to_string())`
+                    // and route through `Custom(RetryDecider)`, OR
+                    // future scheduler enhancement: pass classified
+                    // failures through the execute() Result type
+                    // itself. Until then, default to Transient — the
+                    // conservative "keep trying per policy" choice.
+                    history.push(FailureRecord::new(
                         attempt,
-                        at_ms: chrono::Utc::now().timestamp_millis(),
-                        error: "execute() returned Err".into(),
-                    });
+                        chrono::Utc::now().timestamp_millis(),
+                        "execute() returned Err",
+                    ));
                     if history.len() > 16 {
                         let drop_n = history.len() - 16;
                         history.drain(0..drop_n);

@@ -12,6 +12,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod failure;
+pub use failure::{classify, signature, Failure, FailureKind};
+
 /// Typed identity for a Job. Stable across cycles + scheduler restarts.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobId {

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use shigoto_types::FailureKind;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RetryPolicy {
@@ -34,6 +35,20 @@ impl RetryPolicy {
     /// carries the failure records prior to this decision.
     #[must_use]
     pub fn decide(&self, attempt: u32, history: &[FailureRecord]) -> RetryDecision {
+        // META: Declarative failures route to Deadletter regardless of
+        // policy / attempt budget. The operator-supplied declaration is
+        // broken; no amount of retrying will fix it without operator
+        // action. See `shigoto-types::failure` for the classification.
+        //
+        // This is what makes `RetryPolicy::Exponential { attempts: 100 }`
+        // behave correctly: transient failures get 100 retries; the
+        // first declarative failure stops the loop and surfaces in
+        // status. Same policy, different outcome based on failure kind.
+        if let Some(latest) = history.last() {
+            if latest.kind == FailureKind::Declarative {
+                return RetryDecision::Deadletter;
+            }
+        }
         match self {
             Self::NoRetry => RetryDecision::Deadletter,
             Self::Fixed { attempts, delay_ms } => {
@@ -82,6 +97,46 @@ pub struct FailureRecord {
     pub attempt: u32,
     pub at_ms: i64,
     pub error: String,
+    /// Typed classification (defaults to `Transient` for callers that
+    /// haven't migrated). `RetryPolicy::decide` short-circuits to
+    /// `Deadletter` whenever the latest record's `kind == Declarative`,
+    /// regardless of the policy's attempt budget. See
+    /// `shigoto-types::failure` for the classifier + signature helpers.
+    #[doc(alias = "classification")]
+    pub kind: FailureKind,
+}
+
+impl FailureRecord {
+    /// Construct a record with conservative default classification
+    /// (`Transient`). Use this when the caller doesn't know how to
+    /// classify yet — preserves prior behaviour (always retry per
+    /// policy). Upgrade call sites to `with_kind` as they migrate.
+    #[must_use]
+    pub fn new(attempt: u32, at_ms: i64, error: impl Into<String>) -> Self {
+        Self {
+            attempt,
+            at_ms,
+            error: error.into(),
+            kind: FailureKind::Transient,
+        }
+    }
+
+    /// Construct a typed record — preferred for daemons that classify
+    /// at the failure site.
+    #[must_use]
+    pub fn with_kind(
+        attempt: u32,
+        at_ms: i64,
+        error: impl Into<String>,
+        kind: FailureKind,
+    ) -> Self {
+        Self {
+            attempt,
+            at_ms,
+            error: error.into(),
+            kind,
+        }
+    }
 }
 
 /// Deterministic-pseudo-random jitter: `+/- (jitter * base)` derived
@@ -112,6 +167,82 @@ mod tests {
             RetryPolicy::NoRetry.decide(5, &[]),
             RetryDecision::Deadletter
         );
+    }
+
+    /// META invariant — Declarative failures route to Deadletter
+    /// regardless of policy / attempt budget. This is the typed
+    /// substrate's distinguishing behaviour: same `RetryPolicy`,
+    /// different outcome by failure kind. Verifiability gate per the
+    /// Compounding Directive — explicit test of the META primitive.
+    #[test]
+    fn declarative_failure_deadletters_regardless_of_policy() {
+        let declarative = FailureRecord::with_kind(
+            1,
+            0,
+            "error: does not provide attribute 'foo'",
+            FailureKind::Declarative,
+        );
+
+        // Even with generous Fixed/Exponential budgets, Declarative
+        // short-circuits to Deadletter.
+        let fixed = RetryPolicy::Fixed { attempts: 100, delay_ms: 50 };
+        assert_eq!(
+            fixed.decide(1, &[declarative.clone()]),
+            RetryDecision::Deadletter
+        );
+
+        let exp = RetryPolicy::Exponential {
+            attempts: 100,
+            base_ms: 100,
+            max_ms: 60_000,
+            jitter: 0.1,
+        };
+        assert_eq!(
+            exp.decide(1, &[declarative.clone()]),
+            RetryDecision::Deadletter
+        );
+    }
+
+    #[test]
+    fn transient_failure_honors_policy_budget() {
+        let transient = FailureRecord::with_kind(
+            1,
+            0,
+            "ssh: connect: Connection refused",
+            FailureKind::Transient,
+        );
+
+        // Transient gets the policy's full retry budget.
+        let fixed = RetryPolicy::Fixed { attempts: 3, delay_ms: 100 };
+        match fixed.decide(1, &[transient.clone()]) {
+            RetryDecision::Retry { .. } => (),
+            d => panic!("expected Retry on Transient, got {d:?}"),
+        }
+    }
+
+    #[test]
+    fn declarative_after_transient_history_still_deadletters() {
+        // The LATEST failure's kind matters — a trailing Declarative
+        // overrides any prior Transient history.
+        let history = vec![
+            FailureRecord::with_kind(1, 0, "blip", FailureKind::Transient),
+            FailureRecord::with_kind(2, 0, "blip", FailureKind::Transient),
+            FailureRecord::with_kind(3, 0, "error: does not exist", FailureKind::Declarative),
+        ];
+        let fixed = RetryPolicy::Fixed { attempts: 100, delay_ms: 50 };
+        assert_eq!(fixed.decide(3, &history), RetryDecision::Deadletter);
+    }
+
+    #[test]
+    fn empty_history_falls_through_to_existing_policy() {
+        // Backwards compat — no failure history means existing
+        // policy logic decides. This protects every existing
+        // consumer that hasn't migrated to typed failure records.
+        let fixed = RetryPolicy::Fixed { attempts: 3, delay_ms: 100 };
+        match fixed.decide(1, &[]) {
+            RetryDecision::Retry { .. } => (),
+            d => panic!("expected Retry on empty history, got {d:?}"),
+        }
     }
 
     #[test]
