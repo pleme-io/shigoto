@@ -132,7 +132,13 @@ pub fn classify(raw: &str) -> FailureKind {
         "is not allowed to refer to a store path",
         "cannot coerce",
         "while evaluating definitions from",
-        // NixOS module option type-check errors
+        // NixOS module assertion failures + option type-checks.
+        // The "assert statement" + "in the condition of the assert"
+        // shapes come from `lib.customisation.nix` when a module-level
+        // `assert <expr>` fails — typically a downstream consumer
+        // mis-using a typed option.
+        "in the condition of the assert statement",
+        "assertion failed",
         "The option `",
         "is missing the attribute `",
         // SOPS / secret resolution failures
@@ -144,6 +150,13 @@ pub fn classify(raw: &str) -> FailureKind {
         "schema validation failed",
         "unknown attribute",
         "field required",
+        // Typed-failure wrapper markers — when a consumer (kikai
+        // preflight, magma apply, …) classifies internally and bubbles
+        // up via anyhow, this marker keeps the classification through
+        // re-classification. See `kikai/src/up.rs::preflight` for the
+        // producer side.
+        "preflight failed (Declarative)",
+        "[Declarative]",
     ];
 
     if DECLARATIVE_PATTERNS.iter().any(|pat| raw.contains(pat)) {
@@ -161,13 +174,21 @@ pub fn classify(raw: &str) -> FailureKind {
 /// error twice in a row" → declaration is broken, stop retrying.
 #[must_use]
 pub fn signature(raw: &str) -> String {
+    // Multi-line nix errors often start with `error:\n   <body>`.
+    // Strip *all* "error:" / "warning:" prefixes (with or without a
+    // trailing space) so the first informative line surfaces.
     let trimmed = raw
         .strip_prefix("error: ")
         .or_else(|| raw.strip_prefix("warning: "))
+        .or_else(|| raw.strip_prefix("error:"))
+        .or_else(|| raw.strip_prefix("warning:"))
         .unwrap_or(raw);
+    // Walk lines, skipping empty + skipping lines that are just
+    // "error:" / "warning:" (the wrapper marker without content).
     let core = trimmed
         .lines()
-        .find(|l| !l.trim().is_empty())
+        .map(str::trim)
+        .find(|l| !l.is_empty() && *l != "error:" && *l != "warning:")
         .unwrap_or("")
         .trim();
     truncate(core, 80)
@@ -225,6 +246,37 @@ mod tests {
     fn classifies_unknown_as_transient_by_default() {
         let err = "something went wrong, nobody knows what";
         assert_eq!(classify(err), FailureKind::Transient);
+    }
+
+    /// Regression: nix assert-statement failures from
+    /// `lib/customisation.nix` are operator-declaration bugs.
+    /// Observed in the wild when engenho-local's NixOS module
+    /// evaluation hit a missing cross-module wiring assertion.
+    #[test]
+    fn classifies_nix_assert_statement_as_declarative() {
+        let err = "error:\n       … in the condition of the assert statement\n         at /nix/store/.../lib/customisation.nix:433:9:";
+        assert_eq!(classify(err), FailureKind::Declarative);
+    }
+
+    /// Regression: typed-wrapper marker survives anyhow re-wrap.
+    /// When `kikai/src/up.rs::preflight` classifies an inner error
+    /// as Declarative and wraps it via `anyhow!("preflight failed
+    /// ({}): {}", f.kind, f.message)`, the wrapper marker must
+    /// preserve the classification through daemon re-classification.
+    #[test]
+    fn classifies_typed_wrapper_marker_as_declarative() {
+        let err = "preflight failed (Declarative): nix eval failed";
+        assert_eq!(classify(err), FailureKind::Declarative);
+    }
+
+    /// Regression: multi-line nix error (`error:\n   body`) signature
+    /// should surface the body, not the bare "error:" prefix.
+    #[test]
+    fn signature_walks_past_bare_error_prefix() {
+        let err = "error:\n       … in the condition of the assert statement\n         at /nix/store/...:433:9:";
+        let sig = signature(err);
+        assert!(sig.contains("assert statement"), "got: {sig}");
+        assert_ne!(sig, "error:");
     }
 
     #[test]
