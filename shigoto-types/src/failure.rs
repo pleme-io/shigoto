@@ -157,6 +157,18 @@ pub fn classify(raw: &str) -> FailureKind {
         // producer side.
         "preflight failed (Declarative)",
         "[Declarative]",
+        // Apple Virtualization.framework configuration rejections
+        // (kasou → VZ). VZ returns these when the operator-supplied
+        // VM config is structurally invalid (storage attachment shape,
+        // CPU/memory bounds, network mode mismatch, etc.). Same retry
+        // semantics as a Nix eval error: the operator's declaration
+        // is broken; looping at 300s intervals doesn't help. Surfaces
+        // through kasou's `KasouError::OperationFailed`/`Framework`
+        // wrappers as `"... Invalid virtual machine configuration ..."`.
+        // 2026-05-20 incident: kikai daemon retried 149 times before
+        // SIGTERM because this class was classified Transient.
+        "Invalid virtual machine configuration",
+        "storage device attachment is invalid",
     ];
 
     if DECLARATIVE_PATTERNS.iter().any(|pat| raw.contains(pat)) {
@@ -267,6 +279,39 @@ mod tests {
     fn classifies_typed_wrapper_marker_as_declarative() {
         let err = "preflight failed (Declarative): nix eval failed";
         assert_eq!(classify(err), FailureKind::Declarative);
+    }
+
+    /// Regression: VZ/kasou config rejections are declarative.
+    /// 2026-05-20 incident on `cid`: kikai daemon retried 149 times
+    /// over ~40 hours because the kasou-wrapped VZ error
+    /// `"kasou start failed: VM operation failed: start failed:
+    /// Invalid virtual machine configuration. The storage device
+    /// attachment is invalid."` was classified Transient. Adding
+    /// the VZ-side umbrella + the specific storage-attachment phrase
+    /// to DECLARATIVE_PATTERNS so the daemon surfaces
+    /// BlockedDeclarative after two identical-signature retries.
+    #[test]
+    fn classifies_vz_invalid_configuration_as_declarative() {
+        let err = "kasou start failed: VM operation failed: start failed: \
+                   Invalid virtual machine configuration. The storage device \
+                   attachment is invalid.";
+        assert_eq!(classify(err), FailureKind::Declarative);
+    }
+
+    #[test]
+    fn classifies_vz_storage_attachment_rejection_as_declarative() {
+        let err = "kasou: storage device attachment is invalid";
+        assert_eq!(classify(err), FailureKind::Declarative);
+    }
+
+    /// Negative case: VZ runtime errors (guest stopped, host resource
+    /// pressure, etc.) are NOT declarative. The patterns above must
+    /// be specific enough not to catch every kasou error.
+    #[test]
+    fn classifies_vz_runtime_stop_as_transient() {
+        let err = "kasou: Internal Virtualization error. The virtual \
+                   machine stopped unexpectedly.";
+        assert_eq!(classify(err), FailureKind::Transient);
     }
 
     /// Regression: multi-line nix error (`error:\n   body`) signature
