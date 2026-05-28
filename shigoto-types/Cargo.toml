@@ -17,6 +17,8 @@ schemars.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
+gen-platform.workspace = true
+gen-types.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }

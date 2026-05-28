@@ -20,6 +20,12 @@ shigoto-retry = { path = "shigoto-retry" }
 shigoto-gate = { path = "shigoto-gate" }
 shigoto-emit = { path = "shigoto-emit" }
 shigoto-test = { path = "shigoto-test" }
+
+# Pleme-io sibling-directory path deps for typed-dispatcher
+# catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
+gen-platform = { path = "../gen/crates/gen-platform" }
+gen-types = { path = "../gen/crates/gen-types" }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 schemars = { version = "0.8", features = ["derive"] }

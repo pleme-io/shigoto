@@ -144,13 +144,19 @@ pub enum GateAggregate {
 /// shigoto-retry's `RetryDecision` exposes — duplicated as a typed
 /// signal payload so the FSM stays in shigoto-types without a
 /// dependency on shigoto-retry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, gen_platform::TypedDispatcher)]
 pub enum RetryOutcome {
     /// Retry after `until_ms` (absolute timestamp).
     Retry { until_ms: i64 },
     /// No more attempts — deadletter.
     Deadletter,
 }
+
+// Fleet-wide dispatcher-catalog registration for shigoto's retry
+// outcome typed surface. Fifth consumer class (after gen / caixa /
+// wasm-platform / cofre). See theory/UNIFIED-COMPUTING-MODEL.md §VI
+// for the absorption roadmap.
+gen_platform::register_dispatcher!("shigoto.retry-outcome", RetryOutcome);
 
 /// Rejected transition — `(from, signal)` is not a legal FSM cell.
 /// Returning Result instead of panicking lets consumers report drift
