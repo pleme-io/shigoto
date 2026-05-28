@@ -21,6 +21,9 @@ pub use sink::{AuditFileSink, InMemorySink, MultiSink, NullSink, Sink};
 pub mod classify;
 pub use classify::{ChainedClassifier, Classifier, FailureClassifier, FnClassifier};
 
+pub mod watch;
+pub use watch::{EscalationRouting, TimeoutWatcher, WatchAction, WatchRule};
+
 /// Typed identity for a Job. Stable across cycles + scheduler restarts.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobId {
