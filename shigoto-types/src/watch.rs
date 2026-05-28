@@ -426,12 +426,13 @@ mod tests {
             Duration::from_secs(60),
             WatchAction::Alert(routing_to("c")),
         );
-        // Same inputs → same output, every time.
-        for elapsed_s in [0, 30, 59, 60, 61, 1000] {
-            let a = w.evaluate(&Phase::Compiling, t(0), t(elapsed_s));
-            let b = w.evaluate(&Phase::Compiling, t(0), t(elapsed_s));
-            assert_eq!(a.is_some(), b.is_some(), "non-deterministic at elapsed={elapsed_s}");
-        }
+        // Same inputs → same output, every time. The helper does
+        // full-equality (PartialEq) — strictly stronger than the
+        // legacy `.is_some()` check.
+        crate::testing::assert_deterministic_over(
+            &[0_i64, 30, 59, 60, 61, 1000],
+            |&elapsed_s| w.evaluate(&Phase::Compiling, t(0), t(elapsed_s)),
+        );
     }
 
     // ── ScheduleWindow tests ──────────────────────────────────────

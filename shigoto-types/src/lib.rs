@@ -24,6 +24,8 @@ pub use classify::{ChainedClassifier, Classifier, FailureClassifier, FnClassifie
 pub mod watch;
 pub use watch::{EscalationRouting, ScheduleWindow, TimeoutWatcher, WatchAction, WatchRule};
 
+pub mod testing;
+
 /// Typed identity for a Job. Stable across cycles + scheduler restarts.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobId {
