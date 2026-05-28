@@ -168,6 +168,99 @@ fn elapsed_nonneg(entered_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
     delta.to_std().unwrap_or(Duration::ZERO)
 }
 
+// ── ScheduleWindow — typed schedule-with-window primitive ─────────
+//
+// Spec: theory/FLUXCD-CONVERGENCE.md §III, P1.0.
+//
+// Subsumes FluxCD's ResourceSetInputProvider `schedule[].{cron, timeZone, window}`
+// pattern: an operation should fire at each cron tick, but only run if
+// the current time is within `window` of the scheduled fire-time.
+// Useful for cleanup jobs, backups, scaled-down maintenance windows
+// where missing the window means waiting for next scheduled fire.
+//
+// Stateless — callers do cron expression parsing (e.g. via a cron
+// crate of their choice) and pass in the resolved `scheduled_at`.
+// The primitive carries the typed cron/timezone/window declaration
+// and the `is_in_window` evaluation; cron-expression dispatch lives
+// at the consumer.
+
+/// A schedule-with-window declaration. Cron expression + IANA
+/// timezone + how long the firing window stays open.
+///
+/// Cron expression is left as `String` so consumers can pick their
+/// cron-parser crate; the primitive enforces only the typed shape
+/// + window evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleWindow {
+    /// Cron expression (e.g. `"0 2 * * *"` for daily at 02:00).
+    /// Format depends on the consumer's cron parser; this primitive
+    /// stores the raw string.
+    pub cron: String,
+
+    /// IANA timezone (e.g. `"America/New_York"`, `"UTC"`). Consumers
+    /// resolve cron firings against this zone.
+    pub timezone: String,
+
+    /// How long after a scheduled fire-time the operation may run.
+    /// If `now > scheduled_at + window`, the firing is missed —
+    /// skip until next cron tick.
+    pub window: Duration,
+}
+
+impl ScheduleWindow {
+    /// Construct with sensible defaults: UTC timezone, 5-minute window.
+    pub fn new(cron: impl Into<String>) -> Self {
+        Self {
+            cron: cron.into(),
+            timezone: "UTC".into(),
+            window: Duration::from_secs(5 * 60),
+        }
+    }
+
+    /// Set timezone. Fluent builder method.
+    #[must_use]
+    pub fn with_timezone(mut self, tz: impl Into<String>) -> Self {
+        self.timezone = tz.into();
+        self
+    }
+
+    /// Set window. Fluent builder method.
+    #[must_use]
+    pub fn with_window(mut self, window: Duration) -> Self {
+        self.window = window;
+        self
+    }
+
+    /// Is `now` within `window` of the scheduled fire-time? Used by
+    /// the scheduler to decide "should we fire this tick?".
+    ///
+    /// Returns `true` exactly when `scheduled_at <= now <= scheduled_at + window`.
+    ///
+    /// When `now < scheduled_at`, returns `false` (haven't reached the
+    /// fire-time yet). When `now > scheduled_at + window`, returns
+    /// `false` (window has closed; wait for next fire).
+    pub fn is_in_window(&self, scheduled_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+        if now < scheduled_at {
+            return false;
+        }
+        let window_end = scheduled_at
+            + chrono::Duration::from_std(self.window).unwrap_or_else(|_| chrono::Duration::zero());
+        now <= window_end
+    }
+
+    /// `true` when the window has closed and the next fire-time is in
+    /// the future. Useful for deciding "skip this scheduled occurrence
+    /// and wait for the next."
+    pub fn is_window_closed(&self, scheduled_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+        if now < scheduled_at {
+            return false;
+        }
+        let window_end = scheduled_at
+            + chrono::Duration::from_std(self.window).unwrap_or_else(|_| chrono::Duration::zero());
+        now > window_end
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -339,5 +432,100 @@ mod tests {
             let b = w.evaluate(&Phase::Compiling, t(0), t(elapsed_s));
             assert_eq!(a.is_some(), b.is_some(), "non-deterministic at elapsed={elapsed_s}");
         }
+    }
+
+    // ── ScheduleWindow tests ──────────────────────────────────────
+
+    #[test]
+    fn schedule_window_defaults_utc_and_5min() {
+        let s = ScheduleWindow::new("0 2 * * *");
+        assert_eq!(s.cron, "0 2 * * *");
+        assert_eq!(s.timezone, "UTC");
+        assert_eq!(s.window, Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn schedule_window_builder_overrides() {
+        let s = ScheduleWindow::new("* * * * *")
+            .with_timezone("America/New_York")
+            .with_window(Duration::from_secs(120));
+        assert_eq!(s.timezone, "America/New_York");
+        assert_eq!(s.window, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn schedule_window_now_before_scheduled_is_not_in_window() {
+        let s = ScheduleWindow::new("0 2 * * *").with_window(Duration::from_secs(300));
+        // scheduled at t=1000; now=999 (1s before)
+        assert!(!s.is_in_window(t(1000), t(999)));
+        assert!(!s.is_window_closed(t(1000), t(999)));
+    }
+
+    #[test]
+    fn schedule_window_now_exactly_at_scheduled_is_in_window() {
+        let s = ScheduleWindow::new("0 2 * * *").with_window(Duration::from_secs(300));
+        assert!(s.is_in_window(t(1000), t(1000)));
+        assert!(!s.is_window_closed(t(1000), t(1000)));
+    }
+
+    #[test]
+    fn schedule_window_within_window_is_in_window() {
+        let s = ScheduleWindow::new("0 2 * * *").with_window(Duration::from_secs(300));
+        // scheduled at t=1000, window=300s → window closes at t=1300
+        assert!(s.is_in_window(t(1000), t(1200)));
+        assert!(!s.is_window_closed(t(1000), t(1200)));
+    }
+
+    #[test]
+    fn schedule_window_at_window_boundary_is_in_window() {
+        let s = ScheduleWindow::new("0 2 * * *").with_window(Duration::from_secs(300));
+        // exactly at boundary (now == scheduled + window) is IN window
+        assert!(s.is_in_window(t(1000), t(1300)));
+        assert!(!s.is_window_closed(t(1000), t(1300)));
+    }
+
+    #[test]
+    fn schedule_window_past_window_is_closed() {
+        let s = ScheduleWindow::new("0 2 * * *").with_window(Duration::from_secs(300));
+        // 1s past the window boundary
+        assert!(!s.is_in_window(t(1000), t(1301)));
+        assert!(s.is_window_closed(t(1000), t(1301)));
+        // way past
+        assert!(!s.is_in_window(t(1000), t(99_999)));
+        assert!(s.is_window_closed(t(1000), t(99_999)));
+    }
+
+    #[test]
+    fn schedule_window_in_window_and_closed_are_complementary_after_scheduled() {
+        // After the scheduled fire-time, exactly one of is_in_window
+        // and is_window_closed is true (they partition the post-scheduled timeline).
+        let s = ScheduleWindow::new("* * * * *").with_window(Duration::from_secs(60));
+        for offset in [0, 1, 30, 59, 60, 61, 100, 1000] {
+            let scheduled = t(1000);
+            let now = t(1000 + offset);
+            let in_w = s.is_in_window(scheduled, now);
+            let closed = s.is_window_closed(scheduled, now);
+            assert!(
+                in_w != closed,
+                "exactly one of in_window/closed must be true at offset {offset}; got in={in_w}, closed={closed}"
+            );
+        }
+    }
+
+    #[test]
+    fn schedule_window_serde_round_trip() {
+        let s = ScheduleWindow::new("0 2 * * *")
+            .with_timezone("America/New_York")
+            .with_window(Duration::from_secs(600));
+        let json = serde_json::to_string(&s).unwrap();
+        let back: ScheduleWindow = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn schedule_window_zero_window_only_fires_at_exact_moment() {
+        let s = ScheduleWindow::new("* * * * *").with_window(Duration::ZERO);
+        assert!(s.is_in_window(t(1000), t(1000)), "zero window is exactly the scheduled instant");
+        assert!(!s.is_in_window(t(1000), t(1001)), "one second past is already closed");
     }
 }
