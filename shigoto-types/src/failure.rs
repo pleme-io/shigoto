@@ -47,7 +47,16 @@ use serde::{Deserialize, Serialize};
 /// `Declarative`, no — the operator-supplied declaration is broken and
 /// no amount of retrying will fix it without operator action. Routes
 /// through `Deadletter` in `shigoto-retry::RetryDecision`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `kind()` (variant → stable lowercase string) and `is_transient` /
+/// `is_declarative` (variant predicates) are auto-generated via
+/// `#[derive(Discriminant, IsVariant)]` from gen-platform.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
+    gen_platform::Discriminant,
+    gen_platform::IsVariant,
+)]
+#[discriminant(method = "kind", case = "lower")]
 #[non_exhaustive]
 pub enum FailureKind {
     /// Conditions may clear: builder unreachable, network blip, DHCP
@@ -75,6 +84,8 @@ impl Default for FailureKind {
 
 impl fmt::Display for FailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Display keeps the title-cased form (legacy convention) while
+        // .kind() (auto-generated) returns the lowercase wire form.
         f.write_str(match self {
             Self::Transient => "Transient",
             Self::Declarative => "Declarative",
