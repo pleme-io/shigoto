@@ -37,14 +37,24 @@ pub struct JobId {
     pub subject: JobSubject,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    gen_platform::Discriminant,
+    gen_platform::IsVariant,
+)]
+#[discriminant(method = "kind", case = "kebab")]
 pub enum JobScope {
     Global,
     Workspace(String),
     Repo { workspace: String, repo: String },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    gen_platform::Discriminant,
+    gen_platform::IsVariant,
+)]
+#[discriminant(method = "kind", case = "kebab")]
 pub enum JobSubject {
     None,
     Repo(String),
@@ -69,7 +79,16 @@ impl JobKindId {
 
 /// FSM phase a Job inhabits. See `theory/SHIGOTO.md` §III.3 for the
 /// transition table.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// `kind()` (variant → stable kebab-case string) + variant predicates
+/// (`is_pending`, `is_gated`, ...) auto-generated via gen-platform
+/// derives.
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    gen_platform::Discriminant,
+    gen_platform::IsVariant,
+)]
+#[discriminant(method = "kind", case = "kebab")]
 pub enum JobPhase {
     Pending,
     Gated,
@@ -83,7 +102,12 @@ pub enum JobPhase {
     WaitingForOperator,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    gen_platform::Discriminant,
+    gen_platform::IsVariant,
+)]
+#[discriminant(method = "kind", case = "kebab")]
 pub enum SkipReason {
     GateRejected,
     BlockedByDeadletteredAncestor,
@@ -94,7 +118,14 @@ pub enum SkipReason {
 /// FSM driver — every legal way a Job's phase can change. Exhaustive
 /// over the `(JobPhase, Signal)` cross-product per `theory/SHIGOTO.md`
 /// §IV.1; the `advance` table below enumerates every cell.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `kind()` + variant predicates auto-generated via gen-platform.
+#[derive(
+    Debug, Clone, PartialEq, Eq,
+    gen_platform::Discriminant,
+    gen_platform::IsVariant,
+)]
+#[discriminant(method = "kind", case = "kebab")]
 pub enum Signal {
     /// Re-evaluate gates for a Pending or Gated or Retrying job. The
     /// outcome (Gated / Ready / Skipped) is carried in the signal
@@ -129,7 +160,14 @@ pub enum Signal {
 /// aggregate is the worst outcome (Skip > Wait > Pass) per a typed
 /// reducer in shigoto-gate. We carry the rolled-up result here so the
 /// FSM stays language-agnostic about how the rollup is computed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `kind()` + variant predicates auto-generated via gen-platform.
+#[derive(
+    Debug, Clone, PartialEq, Eq,
+    gen_platform::Discriminant,
+    gen_platform::IsVariant,
+)]
+#[discriminant(method = "kind", case = "kebab")]
 pub enum GateAggregate {
     /// Every gate returned Pass — job advances to Ready.
     AllPassed,
