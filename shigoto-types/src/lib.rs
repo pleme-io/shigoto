@@ -18,6 +18,9 @@ pub use failure::{classify, signature, Failure, FailureKind};
 pub mod sink;
 pub use sink::{AuditFileSink, InMemorySink, MultiSink, NullSink, Sink};
 
+pub mod classify;
+pub use classify::{ChainedClassifier, Classifier, FailureClassifier, FnClassifier};
+
 /// Typed identity for a Job. Stable across cycles + scheduler restarts.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobId {
