@@ -93,6 +93,12 @@ where
 /// classifier. Each rule is tried in declared order; the first
 /// `Some(out)` wins. If no rule matches, the fallback fires.
 ///
+/// As of the Chain extraction (PATTERN-EXTRACTION.md Pattern 3),
+/// `ChainedClassifier<I, O>` is a typed alias over the generic
+/// [`crate::chain::Chain<I, O>`]. Construction (`Chain::new` +
+/// `with_rule`) and the `Classifier::classify` impl are inherited
+/// from the generic via a blanket impl below.
+///
 /// Construction is fluent:
 ///
 /// ```ignore
@@ -100,56 +106,11 @@ where
 ///     .with_rule(|s| s.contains("does not exist").then_some(FailureKind::Declarative))
 ///     .with_rule(|s| s.contains("infinite recursion").then_some(FailureKind::Declarative));
 /// ```
-pub struct ChainedClassifier<I: ?Sized, O> {
-    rules: Vec<Arc<dyn Fn(&I) -> Option<O> + Send + Sync>>,
-    fallback: Arc<dyn Fn(&I) -> O + Send + Sync>,
-}
+pub type ChainedClassifier<I, O> = crate::chain::Chain<I, O>;
 
-impl<I: ?Sized, O> ChainedClassifier<I, O> {
-    /// Construct an empty chain with the given fallback. Adding rules
-    /// via `with_rule` extends the chain.
-    pub fn new<F>(fallback: F) -> Self
-    where
-        F: Fn(&I) -> O + Send + Sync + 'static,
-    {
-        Self {
-            rules: Vec::new(),
-            fallback: Arc::new(fallback),
-        }
-    }
-
-    /// Append a rule. Returns self for fluent chaining.
-    #[must_use]
-    pub fn with_rule<R>(mut self, rule: R) -> Self
-    where
-        R: Fn(&I) -> Option<O> + Send + Sync + 'static,
-    {
-        self.rules.push(Arc::new(rule));
-        self
-    }
-
-    /// Number of rules in the chain (excludes the fallback).
-    pub fn rule_count(&self) -> usize {
-        self.rules.len()
-    }
-}
-
-impl<I: ?Sized, O> Classifier<I, O> for ChainedClassifier<I, O> {
+impl<I: ?Sized, O> Classifier<I, O> for crate::chain::Chain<I, O> {
     fn classify(&self, input: &I) -> O {
-        for rule in &self.rules {
-            if let Some(o) = rule(input) {
-                return o;
-            }
-        }
-        (self.fallback)(input)
-    }
-}
-
-impl<I: ?Sized, O> std::fmt::Debug for ChainedClassifier<I, O> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChainedClassifier")
-            .field("rules", &self.rules.len())
-            .finish()
+        self.evaluate(input)
     }
 }
 
