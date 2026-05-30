@@ -4,3 +4,4 @@
 .direnv/
 .envrc.local
 Cargo.lock.bak
+Cargo.build-spec.json
