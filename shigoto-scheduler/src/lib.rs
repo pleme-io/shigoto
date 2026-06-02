@@ -134,7 +134,7 @@ impl InProcessScheduler {
             }),
             budget: tokio::sync::Mutex::new(BudgetTree::new()),
             tool: tool.into(),
-            emitter: Arc::new(NullEmitter),
+            emitter: Arc::new(NullEmitter::new()),
         }
     }
 
@@ -225,7 +225,7 @@ impl InProcessScheduler {
             reason,
             tool: self.tool.clone(),
         };
-        self.emitter.emit(event);
+        self.emitter.emit(&event);
         Ok(())
     }
 }
@@ -507,8 +507,9 @@ impl InProcessScheduler {
             tool: self.tool.clone(),
         };
         // Fire the emitter (no-op for NullEmitter; appends a JSONL line
-        // for AuditFileEmitter; etc).
-        self.emitter.emit(event.clone());
+        // for AuditFileEmitter; etc). Emit by reference, then hand the
+        // owned event to the receipt vec — no clone needed.
+        self.emitter.emit(&event);
         transitions.push(event);
         Ok(())
     }
@@ -800,15 +801,18 @@ mod tests {
 
     #[tokio::test]
     async fn operator_transition_advances_waiting_for_operator() {
-        use shigoto_emit::TransitionEmitter;
+        use shigoto_types::sink::Sink;
         use std::sync::Mutex;
 
+        // A capture struct that implements `Sink<TransitionEvent>`; the
+        // blanket impl in shigoto-emit gives it `TransitionEmitter` for
+        // free.
         struct Capture {
             log: Arc<Mutex<Vec<TransitionEvent>>>,
         }
-        impl TransitionEmitter for Capture {
-            fn emit(&self, event: TransitionEvent) {
-                self.log.lock().unwrap().push(event);
+        impl Sink<TransitionEvent> for Capture {
+            fn record(&self, event: &TransitionEvent) {
+                self.log.lock().unwrap().push(event.clone());
             }
         }
 
@@ -907,12 +911,14 @@ mod tests {
         }
 
         // ── Capturing emitter ──────────────────────────────
+        // Implements `Sink<TransitionEvent>`; the blanket impl in
+        // shigoto-emit gives it `TransitionEmitter`.
         struct Capture {
             log: Arc<Mutex<Vec<TransitionEvent>>>,
         }
-        impl shigoto_emit::TransitionEmitter for Capture {
-            fn emit(&self, event: TransitionEvent) {
-                self.log.lock().unwrap().push(event);
+        impl shigoto_types::sink::Sink<TransitionEvent> for Capture {
+            fn record(&self, event: &TransitionEvent) {
+                self.log.lock().unwrap().push(event.clone());
             }
         }
         let log = Arc::new(Mutex::new(Vec::new()));
@@ -1276,15 +1282,17 @@ mod tests {
 
     #[tokio::test]
     async fn emitter_receives_every_transition() {
-        use shigoto_emit::TransitionEmitter;
+        use shigoto_types::sink::Sink;
         use std::sync::Mutex;
 
+        // Implements `Sink<TransitionEvent>`; the blanket impl in
+        // shigoto-emit gives it `TransitionEmitter`.
         struct Capture {
             log: Arc<Mutex<Vec<TransitionEvent>>>,
         }
-        impl TransitionEmitter for Capture {
-            fn emit(&self, event: TransitionEvent) {
-                self.log.lock().unwrap().push(event);
+        impl Sink<TransitionEvent> for Capture {
+            fn record(&self, event: &TransitionEvent) {
+                self.log.lock().unwrap().push(event.clone());
             }
         }
 

@@ -80,7 +80,7 @@ mod tests {
         // consumer outside this workspace can write the exact same
         // imports.
         let scheduler = InProcessScheduler::new("umbrella-smoke")
-            .with_emitter(Arc::new(NullEmitter));
+            .with_emitter(Arc::new(NullEmitter::new()));
         let job = Arc::new(SmokeJob);
         let id = <SmokeJob as Job>::id(&job);
         scheduler.register_job(job).await;

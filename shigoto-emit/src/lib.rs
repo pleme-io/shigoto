@@ -9,122 +9,48 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use shigoto_types::{JobId, OutputSink, TransitionEvent};
 
+/// Receivers of `TransitionEvent`. Thin trait over the canonical
+/// [`shigoto_types::sink::Sink<TransitionEvent>`] so every consumer
+/// writing `Arc<dyn TransitionEmitter>` keeps working unchanged after
+/// the theory/CONVERGENCE-ADOPTION.md Phase 0.1 extraction. The blanket
+/// impl below means any `Sink<TransitionEvent>` impl auto-satisfies
+/// `TransitionEmitter` — no per-impl wiring at the consumer side.
+///
+/// `emit` takes `&TransitionEvent` (matching `Sink::record`); the
+/// scheduler passes a borrow and keeps ownership for its own
+/// `transitions_this_tick` vec.
 pub trait TransitionEmitter: Send + Sync {
-    fn emit(&self, event: TransitionEvent);
+    fn emit(&self, event: &TransitionEvent);
+}
+
+impl<T: shigoto_types::sink::Sink<TransitionEvent> + ?Sized> TransitionEmitter for T {
+    fn emit(&self, event: &TransitionEvent) {
+        shigoto_types::sink::Sink::record(self, event);
+    }
 }
 
 /// No-op emitter — the default for tests + consumers without
-/// observability wired up. Sinks should compose via MultiEmitter
-/// instead of stubbing this in production.
-#[derive(Debug, Default)]
-pub struct NullEmitter;
-
-impl TransitionEmitter for NullEmitter {
-    fn emit(&self, _event: TransitionEvent) {
-        // intentional no-op
-    }
-}
+/// observability wired up. Sinks should compose via `MultiEmitter`
+/// instead of stubbing this in production. Alias of the canonical
+/// `shigoto_types::sink::NullSink<TransitionEvent>`.
+pub type NullEmitter = shigoto_types::sink::NullSink<TransitionEvent>;
 
 /// Append-only JSONL audit file. One event per line. Same shape as
 /// tend's existing `audit.rs` so operators can grep both with the
-/// same tooling.
-///
-/// v0.1 is synchronous (write-on-emit with a Mutex). Async upgrade to
-/// a background flush task lands when the synchronous path becomes a
-/// bottleneck (per §VIII.1's non-blocking requirement).
-pub struct AuditFileEmitter {
-    path: PathBuf,
-    /// Write serialized through a Mutex so concurrent emit() calls
-    /// produce interleaved (not interleaved-mid-line) JSONL output.
-    /// Holds the open File handle so we don't reopen per-emit.
-    sink: Mutex<std::fs::File>,
-}
+/// same tooling. Alias of the canonical
+/// `shigoto_types::sink::AuditFileSink<TransitionEvent>` — JSONL
+/// serialization is byte-identical (one `serde_json::to_string` per
+/// line + `writeln!` append).
+pub type AuditFileEmitter = shigoto_types::sink::AuditFileSink<TransitionEvent>;
 
-impl AuditFileEmitter {
-    /// Open (or create) `path` for append. The parent directory is
-    /// created if missing.
-    pub fn new(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        Ok(Self {
-            path,
-            sink: Mutex::new(file),
-        })
-    }
-
-    /// Path the emitter writes to.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl TransitionEmitter for AuditFileEmitter {
-    fn emit(&self, event: TransitionEvent) {
-        let line = match serde_json::to_string(&event) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "audit emit serialize failed; dropping event");
-                return;
-            }
-        };
-        if let Ok(mut file) = self.sink.lock() {
-            if let Err(e) = writeln!(file, "{}", line) {
-                tracing::warn!(error = %e, path = %self.path.display(), "audit emit write failed; dropping event");
-            }
-        }
-    }
-}
-
-/// Fan-out emitter — every inner emitter receives every event.
-pub struct MultiEmitter {
-    inner: Vec<Box<dyn TransitionEmitter>>,
-}
-
-impl MultiEmitter {
-    #[must_use]
-    pub fn new() -> Self {
-        Self { inner: Vec::new() }
-    }
-
-    /// Append a sink. Returns self so calls chain.
-    #[must_use]
-    pub fn with(mut self, emitter: Box<dyn TransitionEmitter>) -> Self {
-        self.inner.push(emitter);
-        self
-    }
-
-    pub fn push(&mut self, emitter: Box<dyn TransitionEmitter>) {
-        self.inner.push(emitter);
-    }
-}
-
-impl Default for MultiEmitter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TransitionEmitter for MultiEmitter {
-    fn emit(&self, event: TransitionEvent) {
-        for sink in &self.inner {
-            sink.emit(event.clone());
-        }
-    }
-}
+/// Fan-out emitter — every inner sink receives every event. Alias of
+/// the canonical `shigoto_types::sink::MultiSink<TransitionEvent>`;
+/// inner sinks are `Arc<dyn Sink<TransitionEvent>>`.
+pub type MultiEmitter = shigoto_types::sink::MultiSink<TransitionEvent>;
 
 // ── Output sinks ─────────────────────────────────────────────────────
 //
@@ -257,9 +183,9 @@ mod tests {
 
     #[test]
     fn null_emitter_does_nothing() {
-        let e = NullEmitter;
+        let e = NullEmitter::new();
         // Must not panic and must return.
-        e.emit(sample_event());
+        e.emit(&sample_event());
     }
 
     #[test]
@@ -268,15 +194,18 @@ mod tests {
         let path = dir.path().join("audit.jsonl");
 
         let emitter = AuditFileEmitter::new(&path).unwrap();
-        emitter.emit(sample_event());
-        emitter.emit(sample_event());
+        emitter.emit(&sample_event());
+        emitter.emit(&sample_event());
+        // Drop so the underlying file flushes.
+        drop(emitter);
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2);
-        // Each line should be valid JSON.
+        // Each line should be valid JSON — same JSONL shape the
+        // deleted hand-rolled AuditFileEmitter produced.
         for line in lines {
-            let _: serde_json::Value = serde_json::from_str(line).unwrap();
+            let _: TransitionEvent = serde_json::from_str(line).unwrap();
         }
     }
 
@@ -286,32 +215,24 @@ mod tests {
         let nested = dir.path().join("a").join("b").join("audit.jsonl");
         // Parent doesn't exist yet.
         let emitter = AuditFileEmitter::new(&nested).unwrap();
-        emitter.emit(sample_event());
+        emitter.emit(&sample_event());
         assert!(nested.exists());
     }
 
     #[test]
     fn multi_emitter_fans_out() {
-        // Use an Arc<Mutex<Vec>> as a capture sink in two slots so we
-        // can verify both received the event.
-        struct CaptureEmitter {
-            log: Arc<Mutex<Vec<TransitionEvent>>>,
-        }
-        impl TransitionEmitter for CaptureEmitter {
-            fn emit(&self, event: TransitionEvent) {
-                self.log.lock().unwrap().push(event);
-            }
-        }
-
-        let a = Arc::new(Mutex::new(Vec::new()));
-        let b = Arc::new(Mutex::new(Vec::new()));
+        use shigoto_types::sink::{InMemorySink, Sink};
+        // Use InMemorySink in two slots so we can verify both received
+        // the event.
+        let a: Arc<InMemorySink<TransitionEvent>> = Arc::new(InMemorySink::new());
+        let b: Arc<InMemorySink<TransitionEvent>> = Arc::new(InMemorySink::new());
         let multi = MultiEmitter::new()
-            .with(Box::new(CaptureEmitter { log: a.clone() }))
-            .with(Box::new(CaptureEmitter { log: b.clone() }));
+            .with(a.clone() as Arc<dyn Sink<TransitionEvent>>)
+            .with(b.clone() as Arc<dyn Sink<TransitionEvent>>);
 
-        multi.emit(sample_event());
-        assert_eq!(a.lock().unwrap().len(), 1);
-        assert_eq!(b.lock().unwrap().len(), 1);
+        multi.emit(&sample_event());
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1);
     }
 
     // ── Output sink tests ────────────────────────────────────────────
@@ -396,11 +317,11 @@ mod tests {
 
         {
             let e = AuditFileEmitter::new(&path).unwrap();
-            e.emit(sample_event());
+            e.emit(&sample_event());
         }
         {
             let e = AuditFileEmitter::new(&path).unwrap();
-            e.emit(sample_event());
+            e.emit(&sample_event());
         }
 
         let contents = std::fs::read_to_string(&path).unwrap();
