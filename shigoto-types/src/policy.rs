@@ -155,4 +155,19 @@ mod tests {
             TestPolicy::resolve(&refs, d()),
         );
     }
+
+    #[test]
+    fn test_policy_obeys_the_cascade_law_harness() {
+        // Dogfood: the generic `assert_cascade_laws_with_default` harness
+        // (crate::testing) agrees with the granular per-law tests above.
+        // Every CascadePolicy consumer gets this proof in one line.
+        crate::testing::assert_cascade_laws_with_default(
+            d(),
+            &[
+                TestPolicy { a: Some(10), ..Default::default() },
+                TestPolicy { b: Some("layer".into()), ..Default::default() },
+                TestPolicy { a: Some(50), b: Some("both".into()) },
+            ],
+        );
+    }
 }

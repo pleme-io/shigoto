@@ -42,6 +42,8 @@
 
 #![allow(missing_docs)]
 
+use crate::policy::CascadePolicy;
+
 /// Assert that the closure produces an identical result when invoked
 /// **once vs twice vs three times** with no intervening state change.
 ///
@@ -135,6 +137,159 @@ where
     }
 }
 
+// ── CascadePolicy law harness ─────────────────────────────────────
+//
+// Turns the `CascadePolicy` trait's documented contract (idempotence,
+// per-field merge, innermost-wins fold, determinism) into a single
+// machine-checked theorem any impl can invoke from its own tests — so
+// no adopter re-spells the law boilerplate that `magma-converge`'s
+// ReactivePolicy (14 hand-written law tests) and `shigoto-types`' own
+// `TestPolicy` currently duplicate. Per `theory/CONVERGENCE-ADOPTION.md`
+// §VI Pillar 10 (proptest + tameshi proof discipline) + the "promises
+// become theorems" thesis: the trait's promise is *proven* per impl,
+// not asserted.
+
+/// Assert that a [`CascadePolicy`](crate::policy::CascadePolicy) impl
+/// satisfies the full trait contract over a set of sample layers.
+///
+/// Call this once in a consumer's test module to prove the concrete
+/// policy obeys the laws — no per-impl idempotence/innermost-wins/
+/// determinism boilerplate. Laws checked:
+///
+/// 1. **resolve-identity** — `resolve(&[], default) == default`.
+/// 2. **idempotence** — `x.merge(L); x.merge(L)` equals one `x.merge(L)`.
+/// 3. **merge-self-identity** — `L.merge(&L) == L` (a layer absorbs
+///    itself: every `Some` field overwrites with its own value, every
+///    `None` preserves).
+/// 4. **determinism** — the same layer slice resolves identically every
+///    time.
+/// 5. **fold-order = layer-order** — `resolve` folds layers left→right
+///    (innermost / rightmost wins per field), matching an independent
+///    re-fold; catches a consumer that wrongly overrides `resolve`.
+///
+/// `default` is the hard-default policy; `layers` are representative
+/// sample layers — ideally each setting a different field, plus one or
+/// two overlapping on a shared field, so the per-field + innermost-wins
+/// laws actually witness.
+///
+/// Failure panics via `assert_eq!`, naming the violated law + layer
+/// index.
+///
+/// # Examples
+///
+/// ```
+/// use shigoto_types::policy::CascadePolicy;
+/// use shigoto_types::testing::assert_cascade_laws;
+///
+/// #[derive(Clone, Default, PartialEq, Debug)]
+/// struct Layer { a: Option<u32>, b: Option<bool> }
+/// impl CascadePolicy for Layer {
+///     fn merge(&mut self, layer: &Self) {
+///         if let Some(v) = layer.a { self.a = Some(v); }
+///         if let Some(v) = layer.b { self.b = Some(v); }
+///     }
+/// }
+///
+/// let default = Layer { a: Some(0), b: Some(false) };
+/// let samples = [
+///     Layer { a: Some(1), ..Default::default() },
+///     Layer { b: Some(true), ..Default::default() },
+///     Layer { a: Some(9), b: Some(true) },
+/// ];
+/// assert_cascade_laws(default, &samples);
+/// ```
+pub fn assert_cascade_laws<P>(default: P, layers: &[P])
+where
+    P: CascadePolicy + PartialEq + std::fmt::Debug,
+{
+    // 1. resolve-identity: no layers leaves the default untouched.
+    assert_eq!(
+        P::resolve(&[], default.clone()),
+        default,
+        "CascadePolicy law (resolve-identity): resolve(&[], default) must equal default"
+    );
+
+    for (i, l) in layers.iter().enumerate() {
+        // 2. idempotence: merging the same layer twice == once.
+        let mut once = default.clone();
+        once.merge(l);
+        let mut twice = default.clone();
+        twice.merge(l);
+        twice.merge(l);
+        assert_eq!(
+            once, twice,
+            "CascadePolicy law (idempotence): merge applied twice must equal once (layer {i})"
+        );
+
+        // 3. merge-self-identity: a layer merged onto itself is unchanged.
+        let mut self_merged = l.clone();
+        self_merged.merge(l);
+        assert_eq!(
+            &self_merged, l,
+            "CascadePolicy law (merge-self-identity): L.merge(&L) must equal L (layer {i})"
+        );
+    }
+
+    // 4. determinism: the same layer slice resolves identically.
+    let refs: Vec<Option<&P>> = layers.iter().map(Some).collect();
+    assert_eq!(
+        P::resolve(&refs, default.clone()),
+        P::resolve(&refs, default.clone()),
+        "CascadePolicy law (determinism): resolve must be deterministic for the same layers"
+    );
+
+    // 5. fold-order = layer-order: resolve folds left→right, so it equals
+    //    merging each layer in order onto the default.
+    let mut folded = default.clone();
+    for l in layers {
+        folded.merge(l);
+    }
+    assert_eq!(
+        P::resolve(&refs, default.clone()),
+        folded,
+        "CascadePolicy law (fold-order): resolve must fold layers in declared order (innermost/rightmost wins)"
+    );
+}
+
+/// [`assert_cascade_laws`] plus the **empty-layer** law (needs
+/// `P: Default`): an all-`None` layer — the `Default` — is a no-op over
+/// any accumulator, so `resolve(&[Some(&P::default())], default)` equals
+/// `default`. This is the strongest harness; prefer it whenever the
+/// policy's `Default` is the canonical all-`None` value (the usual case
+/// for `#[derive(Default)]` over `Option<_>` fields).
+///
+/// # Examples
+///
+/// ```
+/// use shigoto_types::policy::CascadePolicy;
+/// use shigoto_types::testing::assert_cascade_laws_with_default;
+///
+/// #[derive(Clone, Default, PartialEq, Debug)]
+/// struct Layer { a: Option<u32> }
+/// impl CascadePolicy for Layer {
+///     fn merge(&mut self, layer: &Self) {
+///         if let Some(v) = layer.a { self.a = Some(v); }
+///     }
+/// }
+///
+/// assert_cascade_laws_with_default(
+///     Layer { a: Some(0) },
+///     &[Layer { a: Some(7) }],
+/// );
+/// ```
+pub fn assert_cascade_laws_with_default<P>(default: P, layers: &[P])
+where
+    P: CascadePolicy + PartialEq + std::fmt::Debug + Default,
+{
+    assert_cascade_laws(default.clone(), layers);
+    let empty = P::default();
+    assert_eq!(
+        P::resolve(&[Some(&empty)], default.clone()),
+        default,
+        "CascadePolicy law (empty-layer): an all-None (Default) layer must preserve the accumulator"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +320,66 @@ mod tests {
     fn over_empty_slice_is_vacuous_truth() {
         let empty: &[u32] = &[];
         assert_deterministic_over(empty, |&x| x);
+    }
+
+    // ── CascadePolicy harness self-tests ──────────────────────────
+
+    #[derive(Clone, Default, PartialEq, Debug)]
+    struct GoodPolicy {
+        a: Option<u32>,
+        b: Option<String>,
+    }
+    impl CascadePolicy for GoodPolicy {
+        fn merge(&mut self, layer: &Self) {
+            if let Some(v) = &layer.a {
+                self.a = Some(*v);
+            }
+            if let Some(v) = &layer.b {
+                self.b = Some(v.clone());
+            }
+        }
+    }
+
+    #[test]
+    fn cascade_harness_passes_a_correct_impl() {
+        assert_cascade_laws_with_default(
+            GoodPolicy {
+                a: Some(0),
+                b: Some("base".into()),
+            },
+            &[
+                GoodPolicy { a: Some(1), ..Default::default() },
+                GoodPolicy { b: Some("x".into()), ..Default::default() },
+                GoodPolicy { a: Some(9), b: Some("y".into()) },
+            ],
+        );
+    }
+
+    // A deliberately BROKEN impl: `merge` ACCUMULATES into a Vec instead
+    // of overwriting, so it is non-idempotent (merging twice doubles the
+    // pushed values). The harness MUST catch this — a law harness that
+    // can't fail on a broken impl proves nothing.
+    #[derive(Clone, Default, PartialEq, Debug)]
+    struct NonIdempotentPolicy {
+        acc: Vec<u32>,
+        a: Option<u32>,
+    }
+    impl CascadePolicy for NonIdempotentPolicy {
+        fn merge(&mut self, layer: &Self) {
+            if let Some(v) = layer.a {
+                self.acc.push(v); // BUG: append, not overwrite.
+                self.a = Some(v);
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "idempotence")]
+    fn cascade_harness_catches_a_non_idempotent_impl() {
+        assert_cascade_laws(
+            NonIdempotentPolicy::default(),
+            &[NonIdempotentPolicy { a: Some(5), ..Default::default() }],
+        );
     }
 
     #[test]
