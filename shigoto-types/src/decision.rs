@@ -1,5 +1,6 @@
-//! Typed pure-decision function — the canonical `Decision` trait every
-//! fleet-wide deterministic state-transition rule consumes.
+//! Typed pure action-decision — the canonical `Decision` trait every
+//! fleet-wide "decide a controller action from a structured context"
+//! rule consumes.
 //! Spec: `theory/CONVERGENCE-ADOPTION.md` §II.3.
 //!
 //! A **lightweight, general** convergence primitive — pure, no I/O, no
@@ -7,143 +8,110 @@
 //! ([`CascadePolicy`](crate::policy::CascadePolicy),
 //! [`Sink`](crate::sink::Sink), [`Classifier`](crate::classify::Classifier),
 //! [`TimeoutWatcher`](crate::watch::TimeoutWatcher)) so lightweight
-//! controllers adopt it without the magma executor closure. (Re-homed
-//! 2026-06-02 — was `magma-converge::decision`.)
+//! controllers adopt it without the magma executor closure.
 //!
-//! Subsumes the hand-rolled `decide_*` free functions in
-//! `tatara::decide_pool_reconcile` / `decide_allocation_reconcile`,
-//! `pangea-operator::reactive::evaluate`, and `tend::derive_from_receipt`.
+//! # What this is FOR — and how it differs from `Classifier`
 //!
-//! # The shape — `(State, Policy, Observed) -> Output`
+//! `Decision` answers **"what should I DO?"** — given a structured,
+//! typed decision *context*, pick a typed *action*. It is the
+//! action-decision surface that **code generation + `(defdecision …)`
+//! Lisp authoring** target: every controller's "what to do this tick"
+//! becomes a uniform `Ctx -> Action` rule the substrate can wire and
+//! author declaratively.
 //!
-//! Every "given (observed state, declared policy, ambient observations),
-//! decide what to do" rule has the same typed-input → typed-output shape.
+//! This is a DIFFERENT job from
+//! [`Classifier`](crate::classify::Classifier), which answers
+//! **"what IS this?"** — categorize an *opaque / unstructured* input (a
+//! stderr string, an HTTP status) into a typed variant, with
+//! *runtime-composable rules* held in `&self` (the `ChainedClassifier`
+//! rule chain). Pick the right tool:
+//!
+//! - `classify_pull_failure(stderr) -> FailureKind` — categorization → `Classifier`.
+//! - `decide_pool_reconcile(pool, members, now) -> PoolDecision` — action → `Decision`.
+//!
+//! # The shape — one structured `Ctx`, one typed `Action`
+//!
+//! ```ignore
+//! pub trait Decision {
+//!     type Ctx;     // the structured decision context (owned; usually Serialize)
+//!     type Action;  // the typed decision the controller acts on
+//!     fn decide(ctx: &Self::Ctx) -> Self::Action;
+//! }
+//! ```
+//!
 //! No `self` receiver — implementors are zero-sized markers
-//! (`pub struct MyDecision;`); the `decide` associated function is the
-//! entire pure rule, which forbids `&mut self` and accidental stateful
+//! (`pub struct MyDecision;`); the `decide` associated function IS the
+//! whole rule, which forbids `&mut self` and accidental stateful
 //! caching at the trait boundary.
 //!
-//! ## Three inputs, two of them frequently `()`
-//!
-//! A 2026-06-02 fleet survey of the five real `decide_*` functions this
-//! trait subsumes found the original fourth input, `Event`, was **dead
-//! weight** — 0 of 5 consumers took a distinct triggering event (they all
-//! read it out of `State`), and the reference impl ignored it. `Event`
-//! was removed. The remaining two non-`State` inputs are **often absent**,
-//! so the convention is to set them to `()`:
-//!
-//! - `Policy` — only 1 of 5 surveyed functions took a distinct operator
-//!   policy (pangea's `EffectiveReactivePolicy`); the rest encode policy
-//!   in `State`. Set `type Policy = ();` when there is none.
-//! - `Observed` — 3 of 5 use a clock; set `type Observed = ();` when the
-//!   decision needs no ambient observation, or
-//!   `type Observed = chrono::DateTime<Utc>` / a richer struct when it
-//!   does. (Stable Rust has no defaulted associated types, so `()` is
-//!   spelled explicitly per impl.)
-//!
-//! The deeper friction the survey surfaced — real `decide_*` functions
-//! take *borrowed* multi-inputs, which an owned-associated-type `State`
-//! doesn't accommodate without a bundle/lifetime dance — is recorded in
-//! `theory/CONVERGENCE-ADOPTION.md` §II.3 as the thing the first real
-//! consumer (tatara-pool-reconciler) must resolve.
+//! The context is a **single owned struct** that bundles *whatever the
+//! decision needs* — observed state, operator policy, the clock — into
+//! one typed value. Multi-part raw inputs (e.g. tatara's pool spec + a
+//! member slice + the clock) fold into one `Ctx`; the controller does
+//! the cheap **observe → decide** split (extract `Ctx` from raw kube
+//! objects, then `decide`). This is deliberate, not a limitation: a
+//! decision that reads two borrowed things is *still one decision over
+//! one context* — the owned `Ctx` makes that context first-class.
+//! Because `Ctx` is owned and usually `Serialize`, the decision is
+//! table-testable from a literal, and the same `Ctx` shape is what a
+//! future `(defdecision …)` form authors + what a generator emits.
 //!
 //! # The trait law
 //!
-//! `D::decide(&s,&p,&o) == D::decide(&s,&p,&o)` (determinism) — no I/O,
-//! no randomness, no hidden state. The point is to make every
-//! reconciler's decision logic proptest-able without mocks; the
-//! signature forbids side effects.
-//!
-//! # When to reach for the trait — vs a free `fn` + `assert_deterministic`
-//!
-//! A 2026-06-02 audit of all five real `decide_*` functions found this
-//! trait fits a **narrow shape** and must NOT be forced fleet-wide (the
-//! original roadmap's "all 5 adopt Decision" plan was revised):
-//!
-//! - **Fits cleanly:** a decision over a SINGLE owned/borrowable `State`
-//!   (+ optional `Policy`/`Observed`). pangea's
-//!   `evaluate(&InfrastructureTemplate, &policy, now)` is the model — one
-//!   CRD as `State`, one `Policy`, a clock `Observed`. Worth the trait
-//!   only when you genuinely need `&dyn Decision` polymorphism or a
-//!   per-site operator-swappable rule.
-//! - **Don't force it:** a decision over MULTIPLE borrowed inputs — e.g.
-//!   tatara's `decide_pool_reconcile(&pool, &[PoolMember], now)` reads a
-//!   spec AND iterates a member slice. An owned `&Self::State` can't
-//!   borrow two things without GATs or a wasteful owned re-bundle, and
-//!   the trait's only payoff is the determinism law, which a free `fn`
-//!   already gets via [`crate::testing::assert_deterministic`]. Keep
-//!   these as free functions with a determinism test; the purity is
-//!   already enforced by the signature.
-//!
-//! The substrate's pure-decision *pattern* (typed inputs → typed output,
-//! proven deterministic) is the valuable thing; this trait is the
-//! *optional* polymorphic surface over it, not a mandate.
+//! `D::decide(&ctx) == D::decide(&ctx)` (determinism) — no I/O, no
+//! randomness, no hidden state. Proven per impl via
+//! [`crate::testing::assert_deterministic`].
 
 use serde::{Deserialize, Serialize};
 
-/// Pure decision function — typed inputs, typed output, NO I/O. The
-/// substrate's canonical "given (state, policy, observed), decide what
-/// to do" abstraction. Implementations are unit structs
-/// (`pub struct MyDecision;`); the `decide` associated function is the
-/// entire rule.
+/// Pure action-decision — a structured typed context in, a typed action
+/// out, NO I/O. The substrate's canonical "decide what to do" surface.
+/// Implementations are unit structs (`pub struct MyDecision;`); the
+/// `decide` associated function is the entire rule.
 ///
-/// Set `type Policy = ();` / `type Observed = ();` for decisions that
-/// don't take a distinct operator policy / ambient observation — most
-/// real consumers encode policy in `State` and need at most a clock.
-/// See the module docs for the survey that drove this shape.
+/// See the module docs for how this differs from
+/// [`Classifier`](crate::classify::Classifier) (categorize an opaque
+/// input) and when to reach for each.
 pub trait Decision: Send + Sync {
-    /// Current observed state (workspace status, pod phase, CR
-    /// condition). Read-only — Decision never mutates state.
-    type State;
-    /// Operator-declared policy (retry budget, threshold, allowlist).
-    /// `()` when the decision encodes its rules in `State` (the common
-    /// case across the surveyed fleet).
-    type Policy;
-    /// Ambient observations that aren't state/policy — most commonly a
-    /// clock (`chrono::DateTime<Utc>`); `()` when the decision needs
-    /// none.
-    type Observed;
-    /// Typed decision the controller acts on.
-    type Output;
+    /// The structured decision context — a single owned value bundling
+    /// observed state, operator policy, and ambient observations (clock,
+    /// metrics) into one typed struct. Usually `Serialize` so decisions
+    /// are table-testable + `(defdecision)`-authorable.
+    type Ctx;
+    /// The typed decision the controller acts on.
+    type Action;
 
-    /// The decision rule. Pure function of its inputs.
-    fn decide(
-        state: &Self::State,
-        policy: &Self::Policy,
-        observed: &Self::Observed,
-    ) -> Self::Output;
+    /// The decision rule. Pure function of its context.
+    fn decide(ctx: &Self::Ctx) -> Self::Action;
 }
 
 // ── Reference impl: a tiny pool-decision (generic demo) ───────────
-// The canonical first impl + law suite. Synthetic (not domain-specific):
-// it demonstrates the shape every consumer follows — zero-sized marker
-// struct, three typed associated types, one associated function. Unlike
-// the pre-2026-06-02 demo (which ignored its Event + Observed inputs),
-// this one HONESTLY uses every slot it declares: State (member count +
-// last-scaled time), Policy (sizing bounds + cooldown), Observed (the
-// clock, for the cooldown gate). No dead inputs — a faithful template.
+// The canonical first impl. Synthetic (not domain-specific): it shows
+// the shape every consumer follows — a zero-sized marker, one owned
+// `Serialize` `Ctx` that bundles the observed state + sizing policy +
+// clock, one associated function. Models the real multi-part case
+// (tatara's pool spec + member observations + clock) collapsed into a
+// single owned context.
 
-/// Demo state: how many members the pool has now + when it last scaled.
+/// The structured pool-reconcile context. Bundles the observed pool
+/// state, the sizing policy, and the clock into one owned, serializable
+/// value — the shape a `(defdecision)` form would author.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PoolStateDemo {
+pub struct PoolDecisionCtx {
+    // ── observed ──
+    /// Members currently in the pool.
     pub current_members: u32,
     /// Epoch seconds of the last spawn/reap — drives the cooldown gate.
     pub last_scaled_at: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PoolPolicyDemo {
+    /// Current time, epoch seconds.
+    pub now: i64,
+    // ── policy ──
     pub min_size: u32,
     pub max_size: u32,
     pub desired_size: u32,
     /// Don't scale again within this many seconds of the last scale.
     pub cooldown_secs: i64,
 }
-
-/// The ambient clock — epoch seconds. The canonical `Observed` when the
-/// only ambient input is the current time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClockNow(pub i64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
@@ -154,37 +122,30 @@ pub enum PoolDecisionDemo {
 }
 
 /// The reference Decision impl. Zero-sized marker; `decide` is the
-/// entire rule — the canonical migration-target shape for every existing
-/// `fn decide_*` free function in the fleet.
+/// entire rule — the canonical migration-target shape for every
+/// controller's "what to do this tick" function.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct PoolDecisionDemoImpl;
 
 impl Decision for PoolDecisionDemoImpl {
-    type State = PoolStateDemo;
-    type Policy = PoolPolicyDemo;
-    type Observed = ClockNow;
-    type Output = PoolDecisionDemo;
+    type Ctx = PoolDecisionCtx;
+    type Action = PoolDecisionDemo;
 
-    fn decide(
-        state: &Self::State,
-        policy: &Self::Policy,
-        observed: &Self::Observed,
-    ) -> Self::Output {
-        // Cooldown gate (uses Observed + State): don't thrash-scale if we
+    fn decide(ctx: &Self::Ctx) -> Self::Action {
+        // Cooldown gate (observed + clock): don't thrash-scale if we
         // scaled too recently. Clamped at zero against clock skew.
-        let elapsed = observed.0.saturating_sub(state.last_scaled_at);
-        if elapsed < policy.cooldown_secs {
+        let elapsed = ctx.now.saturating_sub(ctx.last_scaled_at);
+        if elapsed < ctx.cooldown_secs {
             return PoolDecisionDemo::NoOp;
         }
-        let current = state.current_members;
-        let desired = policy.desired_size.clamp(policy.min_size, policy.max_size);
-        if current < desired {
+        let desired = ctx.desired_size.clamp(ctx.min_size, ctx.max_size);
+        if ctx.current_members < desired {
             PoolDecisionDemo::Spawn {
-                count: desired - current,
+                count: desired - ctx.current_members,
             }
-        } else if current > desired {
+        } else if ctx.current_members > desired {
             PoolDecisionDemo::ReapExcess {
-                count: current - desired,
+                count: ctx.current_members - desired,
             }
         } else {
             PoolDecisionDemo::NoOp
@@ -196,31 +157,24 @@ impl Decision for PoolDecisionDemoImpl {
 mod tests {
     use super::*;
 
-    // State last scaled at t=0; the default clock is far past it so the
-    // cooldown is satisfied and the sizing logic is what's exercised
-    // (unless a test specifically probes the cooldown gate).
-    fn s(n: u32) -> PoolStateDemo {
-        PoolStateDemo {
-            current_members: n,
+    // A context scaled long ago (cooldown satisfied) with given member
+    // count + desired; helpers vary only what each test probes.
+    fn ctx(current: u32, desired: u32) -> PoolDecisionCtx {
+        PoolDecisionCtx {
+            current_members: current,
             last_scaled_at: 0,
-        }
-    }
-    fn p(min: u32, max: u32, desired: u32) -> PoolPolicyDemo {
-        PoolPolicyDemo {
-            min_size: min,
-            max_size: max,
+            now: 10_000, // far past last_scaled_at + cooldown
+            min_size: 1,
+            max_size: 10,
             desired_size: desired,
             cooldown_secs: 60,
         }
-    }
-    fn now() -> ClockNow {
-        ClockNow(10_000) // far past last_scaled_at=0 + cooldown=60
     }
 
     #[test]
     fn at_desired_size_is_noop() {
         assert_eq!(
-            PoolDecisionDemoImpl::decide(&s(3), &p(1, 10, 3), &now()),
+            PoolDecisionDemoImpl::decide(&ctx(3, 3)),
             PoolDecisionDemo::NoOp
         );
     }
@@ -228,7 +182,7 @@ mod tests {
     #[test]
     fn below_desired_spawns_delta() {
         assert_eq!(
-            PoolDecisionDemoImpl::decide(&s(2), &p(1, 10, 5), &now()),
+            PoolDecisionDemoImpl::decide(&ctx(2, 5)),
             PoolDecisionDemo::Spawn { count: 3 }
         );
     }
@@ -236,50 +190,63 @@ mod tests {
     #[test]
     fn above_desired_reaps_delta() {
         assert_eq!(
-            PoolDecisionDemoImpl::decide(&s(8), &p(1, 10, 5), &now()),
+            PoolDecisionDemoImpl::decide(&ctx(8, 5)),
             PoolDecisionDemo::ReapExcess { count: 3 }
         );
     }
 
     #[test]
     fn desired_clamped_by_policy_bounds() {
+        // desired 20 clamped to max 10: current 5 < 10 → spawn 5.
+        let to_max = PoolDecisionCtx {
+            current_members: 5,
+            desired_size: 20,
+            ..ctx(5, 20)
+        };
         assert_eq!(
-            PoolDecisionDemoImpl::decide(&s(5), &p(1, 10, 20), &now()),
+            PoolDecisionDemoImpl::decide(&to_max),
             PoolDecisionDemo::Spawn { count: 5 },
-            "desired clamped to max"
+            "clamped to max"
         );
+        // desired 0 clamped to min 2: current 5 > 2 → reap 3.
+        let to_min = PoolDecisionCtx {
+            current_members: 5,
+            min_size: 2,
+            desired_size: 0,
+            ..ctx(5, 0)
+        };
         assert_eq!(
-            PoolDecisionDemoImpl::decide(&s(5), &p(2, 10, 0), &now()),
+            PoolDecisionDemoImpl::decide(&to_min),
             PoolDecisionDemo::ReapExcess { count: 3 },
-            "desired clamped to min"
+            "clamped to min"
         );
     }
 
     #[test]
     fn within_cooldown_is_noop_even_when_undersized() {
-        // Scaled at t=9_990, clock at t=10_000 → 10s elapsed, cooldown=60
-        // → gate active → NoOp despite being undersized. Proves the
-        // Observed (clock) slot is load-bearing, not dead weight.
-        let recently_scaled = PoolStateDemo {
+        // Scaled at t=9_990, now t=10_000 → 10s elapsed, cooldown 60 →
+        // gate active → NoOp despite being undersized. Proves the clock
+        // half of the context is load-bearing.
+        let c = PoolDecisionCtx {
             current_members: 1,
             last_scaled_at: 9_990,
+            now: 10_000,
+            ..ctx(1, 5)
         };
         assert_eq!(
-            PoolDecisionDemoImpl::decide(&recently_scaled, &p(1, 10, 5), &ClockNow(10_000)),
+            PoolDecisionDemoImpl::decide(&c),
             PoolDecisionDemo::NoOp,
-            "cooldown gate (Observed) suppresses scaling"
+            "cooldown gate suppresses scaling"
         );
     }
 
-    /// The trait law: same inputs → same output, every time. Dogfoods
-    /// the shared `testing::assert_deterministic` helper rather than
-    /// hand-spelling the let-a-let-b shape.
+    /// The trait law: same context → same action, every time. Dogfoods
+    /// the shared `testing::assert_deterministic` helper.
     #[test]
     fn determinism_law() {
-        for (state, policy) in [(s(0), p(1, 5, 3)), (s(3), p(1, 5, 3)), (s(7), p(1, 5, 3))].iter() {
-            crate::testing::assert_deterministic(|| {
-                PoolDecisionDemoImpl::decide(state, policy, &now())
-            });
+        for (cur, des) in [(0u32, 3u32), (3, 3), (7, 3)] {
+            let c = ctx(cur, des);
+            crate::testing::assert_deterministic(|| PoolDecisionDemoImpl::decide(&c));
         }
     }
 
@@ -287,20 +254,26 @@ mod tests {
     /// impl is a unit struct, so monomorphization is cheap).
     #[test]
     fn generic_consumer_pattern() {
-        fn run_one<D: Decision>(s: &D::State, p: &D::Policy, o: &D::Observed) -> D::Output {
-            D::decide(s, p, o)
+        fn run_one<D: Decision>(c: &D::Ctx) -> D::Action {
+            D::decide(c)
         }
         assert_eq!(
-            run_one::<PoolDecisionDemoImpl>(&s(2), &p(1, 10, 5), &now()),
+            run_one::<PoolDecisionDemoImpl>(&ctx(2, 5)),
             PoolDecisionDemo::Spawn { count: 3 }
         );
     }
 
     #[test]
-    fn decision_output_serde_roundtrip() {
-        let dec = PoolDecisionDemo::Spawn { count: 7 };
-        let json = serde_json::to_string(&dec).unwrap();
-        let back: PoolDecisionDemo = serde_json::from_str(&json).unwrap();
-        assert_eq!(dec, back);
+    fn ctx_and_action_serde_roundtrip() {
+        // Ctx is Serialize so decisions are table-testable from a literal
+        // + the shape is `(defdecision)`-authorable.
+        let c = ctx(2, 5);
+        let back: PoolDecisionCtx =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(c, back);
+        let a = PoolDecisionDemo::Spawn { count: 7 };
+        let back_a: PoolDecisionDemo =
+            serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(a, back_a);
     }
 }
