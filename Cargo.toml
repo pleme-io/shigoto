@@ -11,20 +11,20 @@ repository = "https://github.com/pleme-io/shigoto"
 authors = ["pleme-io"]
 
 [workspace.dependencies]
-shigoto = { path = "shigoto" }
-shigoto-types = { path = "shigoto-types" }
-shigoto-dag = { path = "shigoto-dag" }
-shigoto-scheduler = { path = "shigoto-scheduler" }
-shigoto-budget = { path = "shigoto-budget" }
-shigoto-retry = { path = "shigoto-retry" }
-shigoto-gate = { path = "shigoto-gate" }
-shigoto-emit = { path = "shigoto-emit" }
-shigoto-test = { path = "shigoto-test" }
+shigoto = { version = "0.1.0", path = "shigoto" }
+shigoto-types = { version = "0.1.0", path = "shigoto-types" }
+shigoto-dag = { version = "0.1.0", path = "shigoto-dag" }
+shigoto-scheduler = { version = "0.1.0", path = "shigoto-scheduler" }
+shigoto-budget = { version = "0.1.0", path = "shigoto-budget" }
+shigoto-retry = { version = "0.1.0", path = "shigoto-retry" }
+shigoto-gate = { version = "0.1.0", path = "shigoto-gate" }
+shigoto-emit = { version = "0.1.0", path = "shigoto-emit" }
+shigoto-test = { version = "0.1.0", path = "shigoto-test" }
 
 # Pleme-io sibling-directory path deps for typed-dispatcher
 # catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
-gen-platform = { git = "https://github.com/pleme-io/gen" }
-gen-types = { git = "https://github.com/pleme-io/gen" }
+gen-platform = { version = "0.1", git = "https://github.com/pleme-io/gen" }
+gen-types = { version = "0.1", git = "https://github.com/pleme-io/gen" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
