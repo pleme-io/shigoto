@@ -53,6 +53,31 @@
 //! no randomness, no hidden state. The point is to make every
 //! reconciler's decision logic proptest-able without mocks; the
 //! signature forbids side effects.
+//!
+//! # When to reach for the trait — vs a free `fn` + `assert_deterministic`
+//!
+//! A 2026-06-02 audit of all five real `decide_*` functions found this
+//! trait fits a **narrow shape** and must NOT be forced fleet-wide (the
+//! original roadmap's "all 5 adopt Decision" plan was revised):
+//!
+//! - **Fits cleanly:** a decision over a SINGLE owned/borrowable `State`
+//!   (+ optional `Policy`/`Observed`). pangea's
+//!   `evaluate(&InfrastructureTemplate, &policy, now)` is the model — one
+//!   CRD as `State`, one `Policy`, a clock `Observed`. Worth the trait
+//!   only when you genuinely need `&dyn Decision` polymorphism or a
+//!   per-site operator-swappable rule.
+//! - **Don't force it:** a decision over MULTIPLE borrowed inputs — e.g.
+//!   tatara's `decide_pool_reconcile(&pool, &[PoolMember], now)` reads a
+//!   spec AND iterates a member slice. An owned `&Self::State` can't
+//!   borrow two things without GATs or a wasteful owned re-bundle, and
+//!   the trait's only payoff is the determinism law, which a free `fn`
+//!   already gets via [`crate::testing::assert_deterministic`]. Keep
+//!   these as free functions with a determinism test; the purity is
+//!   already enforced by the signature.
+//!
+//! The substrate's pure-decision *pattern* (typed inputs → typed output,
+//! proven deterministic) is the valuable thing; this trait is the
+//! *optional* polymorphic surface over it, not a mandate.
 
 use serde::{Deserialize, Serialize};
 
