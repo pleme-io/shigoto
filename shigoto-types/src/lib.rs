@@ -27,6 +27,15 @@ pub use classify::{ChainedClassifier, Classifier, FailureClassifier, FnClassifie
 pub mod watch;
 pub use watch::{EscalationRouting, ScheduleWindow, TimeoutWatcher, WatchAction, WatchRule};
 
+// Lightweight convergence primitives re-homed from magma-converge
+// (2026-06-02) — see theory/CONVERGENCE-ADOPTION.md. General, pure,
+// IaC-free, so lightweight controllers adopt them without the magma
+// executor closure.
+pub mod policy;
+pub use policy::CascadePolicy;
+pub mod decision;
+pub use decision::Decision;
+
 pub mod testing;
 
 /// Typed identity for a Job. Stable across cycles + scheduler restarts.
