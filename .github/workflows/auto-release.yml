@@ -1,0 +1,24 @@
+name: auto-release
+
+# Workspace auto-release: every push to main bumps the shared
+# workspace version, commits + tags v<X.Y.Z>, and uploads every
+# member crate to crates.io (multi-pass dependency order). Points
+# at the per-language reusable directly (the proven engenho/tend/
+# hashfix pattern) rather than the polymorphic dispatcher.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump-type:
+        description: "patch | minor | major"
+        required: false
+        default: patch
+
+jobs:
+  release:
+    uses: pleme-io/substrate/.github/workflows/rust-auto-release.yml@main
+    with:
+      bump-type: ${{ inputs.bump-type || 'patch' }}
+    secrets: inherit
