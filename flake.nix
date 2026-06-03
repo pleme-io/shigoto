@@ -7,6 +7,20 @@
     flake-utils = {
       url = "github:numtide/flake-utils";
     };
+    # crate2nix + fenix are consumed by the rust-library-workspace-flake
+    # builder below (outputs destructures both). They MUST be declared as
+    # inputs — without them nix resolves `flake:crate2nix` / `flake:fenix`
+    # from the registry and `nix flake check` fails on a clean CI runner
+    # ("cannot find flake 'flake:crate2nix' in the flake registries").
+    # Both follow nixpkgs to avoid closure duplication (org convention).
+    crate2nix = {
+      url = "github:nix-community/crate2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     substrate = {
       url = "github:pleme-io/substrate";
       inputs.nixpkgs.follows = "nixpkgs";
