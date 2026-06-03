@@ -5,3 +5,4 @@
 .envrc.local
 Cargo.lock.bak
 Cargo.build-spec.json
+crate-hashes.json
