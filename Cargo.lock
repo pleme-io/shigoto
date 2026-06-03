@@ -195,8 +195,8 @@ dependencies = [
 
 [[package]]
 name = "gen-macros"
-version = "0.1.0"
-source = "git+https://github.com/pleme-io/gen#0d9df5087f3b9c1a30988b9dfe08e280f72df83f"
+version = "0.1.5"
+source = "git+https://github.com/pleme-io/gen#f18830b4ef710ebe44c6d92abf0e020fd6943414"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -205,8 +205,8 @@ dependencies = [
 
 [[package]]
 name = "gen-platform"
-version = "0.1.0"
-source = "git+https://github.com/pleme-io/gen#0d9df5087f3b9c1a30988b9dfe08e280f72df83f"
+version = "0.1.5"
+source = "git+https://github.com/pleme-io/gen#f18830b4ef710ebe44c6d92abf0e020fd6943414"
 dependencies = [
  "gen-macros",
  "gen-types",
@@ -218,8 +218,8 @@ dependencies = [
 
 [[package]]
 name = "gen-types"
-version = "0.1.0"
-source = "git+https://github.com/pleme-io/gen#0d9df5087f3b9c1a30988b9dfe08e280f72df83f"
+version = "0.1.5"
+source = "git+https://github.com/pleme-io/gen#f18830b4ef710ebe44c6d92abf0e020fd6943414"
 dependencies = [
  "blake3",
  "chrono",
