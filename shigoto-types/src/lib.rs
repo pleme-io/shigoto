@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub mod failure;
-pub use failure::{classify, signature, Failure, FailureKind};
+pub use failure::{Failure, FailureKind, classify, signature};
 
 pub mod sink;
 pub use sink::{AuditFileSink, InMemorySink, MultiSink, NullSink, Sink};
@@ -47,7 +47,13 @@ pub struct JobId {
 }
 
 #[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
     gen_platform::Discriminant,
     gen_platform::IsVariant,
 )]
@@ -59,7 +65,13 @@ pub enum JobScope {
 }
 
 #[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
     gen_platform::Discriminant,
     gen_platform::IsVariant,
 )]
@@ -93,7 +105,13 @@ impl JobKindId {
 /// (`is_pending`, `is_gated`, ...) auto-generated via gen-platform
 /// derives.
 #[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
     gen_platform::Discriminant,
     gen_platform::IsVariant,
 )]
@@ -112,7 +130,13 @@ pub enum JobPhase {
 }
 
 #[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    Serialize,
+    Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
     gen_platform::Discriminant,
     gen_platform::IsVariant,
 )]
@@ -129,11 +153,7 @@ pub enum SkipReason {
 /// §IV.1; the `advance` table below enumerates every cell.
 ///
 /// `kind()` + variant predicates auto-generated via gen-platform.
-#[derive(
-    Debug, Clone, PartialEq, Eq,
-    gen_platform::Discriminant,
-    gen_platform::IsVariant,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, gen_platform::Discriminant, gen_platform::IsVariant)]
 #[discriminant(method = "kind", case = "kebab")]
 pub enum Signal {
     /// Re-evaluate gates for a Pending or Gated or Retrying job. The
@@ -171,11 +191,7 @@ pub enum Signal {
 /// FSM stays language-agnostic about how the rollup is computed.
 ///
 /// `kind()` + variant predicates auto-generated via gen-platform.
-#[derive(
-    Debug, Clone, PartialEq, Eq,
-    gen_platform::Discriminant,
-    gen_platform::IsVariant,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, gen_platform::Discriminant, gen_platform::IsVariant)]
 #[discriminant(method = "kind", case = "kebab")]
 pub enum GateAggregate {
     /// Every gate returned Pass — job advances to Ready.
@@ -244,9 +260,7 @@ pub fn advance(from: JobPhase, signal: Signal) -> Result<JobPhase, IllegalTransi
         // ── Gated re-evaluates each tick ───────────────────────
         (JobPhase::Gated, EvaluateGates(GateAggregate::AllPassed)) => JobPhase::Ready,
         (JobPhase::Gated, EvaluateGates(GateAggregate::SomeWaiting)) => JobPhase::Gated,
-        (JobPhase::Gated, EvaluateGates(GateAggregate::Skipped(r))) => {
-            JobPhase::Skipped(r.clone())
-        }
+        (JobPhase::Gated, EvaluateGates(GateAggregate::Skipped(r))) => JobPhase::Skipped(r.clone()),
 
         // ── Ready awaits budget allocation ─────────────────────
         (JobPhase::Ready, AllocateBudget) => JobPhase::Running,
@@ -255,9 +269,7 @@ pub fn advance(from: JobPhase, signal: Signal) -> Result<JobPhase, IllegalTransi
         // as Gated.
         (JobPhase::Ready, EvaluateGates(GateAggregate::AllPassed)) => JobPhase::Ready,
         (JobPhase::Ready, EvaluateGates(GateAggregate::SomeWaiting)) => JobPhase::Gated,
-        (JobPhase::Ready, EvaluateGates(GateAggregate::Skipped(r))) => {
-            JobPhase::Skipped(r.clone())
-        }
+        (JobPhase::Ready, EvaluateGates(GateAggregate::Skipped(r))) => JobPhase::Skipped(r.clone()),
 
         // ── Running terminates per execute() outcome ───────────
         (JobPhase::Running, ExecutionSucceeded) => JobPhase::Succeeded,
@@ -570,9 +582,7 @@ impl Snapshot {
             .filter(|(_, p)| {
                 matches!(
                     p,
-                    JobPhase::Failed { .. }
-                        | JobPhase::Retrying { .. }
-                        | JobPhase::Deadlettered
+                    JobPhase::Failed { .. } | JobPhase::Retrying { .. } | JobPhase::Deadlettered
                 )
             })
             .map(|(id, p)| (id.clone(), p.clone()))

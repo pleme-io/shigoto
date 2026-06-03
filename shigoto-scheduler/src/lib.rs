@@ -21,8 +21,8 @@ use shigoto_emit::{NullEmitter, TransitionEmitter};
 use shigoto_gate::{self, AllUpstreamsTerminal, Gate, GateContext, GateOutcome};
 use shigoto_retry::{FailureRecord, RetryDecision, RetryPolicy};
 use shigoto_types::{
-    advance, ErasedJob, GateAggregate, IllegalTransition, JobId, JobKindId, JobPhase, RetryOutcome,
-    Signal, Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift,
+    ErasedJob, GateAggregate, IllegalTransition, JobId, JobKindId, JobPhase, RetryOutcome, Signal,
+    Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift, advance,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -381,7 +381,8 @@ impl InProcessScheduler {
                 if now_ms < *until_ms {
                     return Ok(false);
                 }
-                self.dispatch(id, Signal::BackoffElapsed, transitions).await?;
+                self.dispatch(id, Signal::BackoffElapsed, transitions)
+                    .await?;
                 Ok(true)
             }
 
@@ -396,7 +397,8 @@ impl InProcessScheduler {
                 if !allocated {
                     return Ok(false);
                 }
-                self.dispatch(id, Signal::AllocateBudget, transitions).await?;
+                self.dispatch(id, Signal::AllocateBudget, transitions)
+                    .await?;
                 Ok(true)
             }
 
@@ -412,7 +414,8 @@ impl InProcessScheduler {
             // Failed → retry decision via registered RetryPolicy.
             JobPhase::Failed { .. } => {
                 let outcome = self.decide_retry(id).await;
-                self.dispatch(id, Signal::RetryDecide(outcome), transitions).await?;
+                self.dispatch(id, Signal::RetryDecide(outcome), transitions)
+                    .await?;
                 Ok(true)
             }
         }
@@ -430,11 +433,7 @@ impl InProcessScheduler {
                 .cloned()
                 .unwrap_or(RetryPolicy::NoRetry);
             let attempt = state.attempts.get(id).copied().unwrap_or(1);
-            let history = state
-                .failure_history
-                .get(id)
-                .cloned()
-                .unwrap_or_default();
+            let history = state.failure_history.get(id).cloned().unwrap_or_default();
             (policy, attempt, history)
         };
         match policy.decide(attempt, &history) {
@@ -524,10 +523,7 @@ impl InProcessScheduler {
     /// `Err(())` so the caller's `apply_execution_result` path takes
     /// the failure branch (preserving the old `run_job` semantic of
     /// immediate-deadletter on missing Job).
-    async fn execute_concurrent(
-        &self,
-        ids: &[JobId],
-    ) -> Vec<(JobId, Result<(), ()>)> {
+    async fn execute_concurrent(&self, ids: &[JobId]) -> Vec<(JobId, Result<(), ()>)> {
         use tokio::task::JoinSet;
         let mut set = JoinSet::new();
         for id in ids {
@@ -643,10 +639,7 @@ impl InProcessScheduler {
 fn collect_unhealed(phases: &HashMap<JobId, JobPhase>) -> Vec<UnhealedDrift> {
     let mut out: Vec<UnhealedDrift> = Vec::new();
     for (id, phase) in phases {
-        let stuck = matches!(
-            phase,
-            JobPhase::Deadlettered | JobPhase::WaitingForOperator
-        );
+        let stuck = matches!(phase, JobPhase::Deadlettered | JobPhase::WaitingForOperator);
         if stuck {
             out.push(UnhealedDrift {
                 job_id: id.clone(),
@@ -678,7 +671,9 @@ fn reason_from(signal: &Signal) -> TransitionReason {
         Signal::EvaluateGates(_) => TransitionReason::GateEvaluation,
         Signal::AllocateBudget => TransitionReason::BudgetAllocated,
         Signal::ExecutionSucceeded => TransitionReason::ExecutionSucceeded,
-        Signal::ExecutionFailed => TransitionReason::ExecutionFailed("execute() returned Err".into()),
+        Signal::ExecutionFailed => {
+            TransitionReason::ExecutionFailed("execute() returned Err".into())
+        }
         Signal::RetryDecide(RetryOutcome::Retry { .. }) => TransitionReason::RetryScheduled,
         Signal::RetryDecide(RetryOutcome::Deadletter) => {
             TransitionReason::ExecutionFailed("retries exhausted".into())
@@ -686,7 +681,9 @@ fn reason_from(signal: &Signal) -> TransitionReason {
         Signal::Cancel => TransitionReason::Cancelled,
         Signal::Timeout => TransitionReason::TimedOut,
         Signal::BackoffElapsed => TransitionReason::BackoffElapsed,
-        Signal::OperatorTransition(_) => TransitionReason::OperatorAction("manual transition".into()),
+        Signal::OperatorTransition(_) => {
+            TransitionReason::OperatorAction("manual transition".into())
+        }
     }
 }
 
@@ -791,8 +788,12 @@ mod tests {
         let leaf = mk_id("test", "leaf");
         let mut dag = Dag::new();
         dag.add_edge(root.clone(), leaf.clone());
-        scheduler.register_job(Arc::new(OkJob { id: root.clone() })).await;
-        scheduler.register_job(Arc::new(OkJob { id: leaf.clone() })).await;
+        scheduler
+            .register_job(Arc::new(OkJob { id: root.clone() }))
+            .await;
+        scheduler
+            .register_job(Arc::new(OkJob { id: leaf.clone() }))
+            .await;
 
         scheduler.tick(&mut dag).await.unwrap();
         assert_eq!(scheduler.phase_of(&root).await, JobPhase::Succeeded);
@@ -817,13 +818,15 @@ mod tests {
         }
 
         let log = Arc::new(Mutex::new(Vec::new()));
-        let scheduler = InProcessScheduler::new("test")
-            .with_emitter(Arc::new(Capture { log: log.clone() }));
+        let scheduler =
+            InProcessScheduler::new("test").with_emitter(Arc::new(Capture { log: log.clone() }));
         let id = mk_id("test", "manual");
         // Seed the phase to WaitingForOperator manually.
         {
             let mut state = scheduler.state.write().await;
-            state.phases.insert(id.clone(), JobPhase::WaitingForOperator);
+            state
+                .phases
+                .insert(id.clone(), JobPhase::WaitingForOperator);
         }
         scheduler
             .operator_transition(
@@ -876,8 +879,8 @@ mod tests {
     async fn integration_diamond_with_gate_and_retry_walks_expected_path() {
         use shigoto_gate::OperatorApproved;
         use shigoto_retry::RetryPolicy;
-        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
         use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
         // ── Test jobs ───────────────────────────────────────
         // Middle's gate flips when this flips.
@@ -902,11 +905,7 @@ mod tests {
             }
             async fn execute(&self) -> Result<(), OkError> {
                 let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
-                if attempt == 0 {
-                    Err(OkError)
-                } else {
-                    Ok(())
-                }
+                if attempt == 0 { Err(OkError) } else { Ok(()) }
             }
         }
 
@@ -1140,7 +1139,9 @@ mod tests {
         let dead = mk_id("test", "dead");
         let mut dag = Dag::new();
         dag.ensure_node(dead.clone());
-        scheduler.register_job(Arc::new(FailJob { id: dead.clone() })).await;
+        scheduler
+            .register_job(Arc::new(FailJob { id: dead.clone() }))
+            .await;
 
         // One WaitingForOperator (seeded directly).
         let waiting = mk_id("test", "waiting");
@@ -1154,7 +1155,9 @@ mod tests {
         // One Succeeded (OkJob).
         let happy = mk_id("test", "happy");
         dag.ensure_node(happy.clone());
-        scheduler.register_job(Arc::new(OkJob { id: happy.clone() })).await;
+        scheduler
+            .register_job(Arc::new(OkJob { id: happy.clone() }))
+            .await;
 
         let receipt = scheduler.tick(&mut dag).await.unwrap();
 
@@ -1194,7 +1197,9 @@ mod tests {
         let id = mk_id("test", "want-budget");
         let mut dag = Dag::new();
         dag.ensure_node(id.clone());
-        scheduler.register_job(Arc::new(OkJob { id: id.clone() })).await;
+        scheduler
+            .register_job(Arc::new(OkJob { id: id.clone() }))
+            .await;
 
         // Tick: gate evaluates → Ready. Budget allocation fails → stay Ready.
         scheduler.tick(&mut dag).await.unwrap();
@@ -1262,13 +1267,13 @@ mod tests {
         }));
 
         let scheduler = InProcessScheduler::new("test");
-        scheduler
-            .register_gate(JobKindId::new("test"), gate)
-            .await;
+        scheduler.register_gate(JobKindId::new("test"), gate).await;
         let id = mk_id("test", "blocked");
         let mut dag = Dag::new();
         dag.ensure_node(id.clone());
-        scheduler.register_job(Arc::new(OkJob { id: id.clone() })).await;
+        scheduler
+            .register_job(Arc::new(OkJob { id: id.clone() }))
+            .await;
 
         // First tick: gate returns Wait → job lands in Gated.
         scheduler.tick(&mut dag).await.unwrap();
@@ -1297,12 +1302,14 @@ mod tests {
         }
 
         let log = Arc::new(Mutex::new(Vec::new()));
-        let scheduler = InProcessScheduler::new("test")
-            .with_emitter(Arc::new(Capture { log: log.clone() }));
+        let scheduler =
+            InProcessScheduler::new("test").with_emitter(Arc::new(Capture { log: log.clone() }));
         let id = mk_id("test", "emit-me");
         let mut dag = Dag::new();
         dag.ensure_node(id.clone());
-        scheduler.register_job(Arc::new(OkJob { id: id.clone() })).await;
+        scheduler
+            .register_job(Arc::new(OkJob { id: id.clone() }))
+            .await;
 
         scheduler.tick(&mut dag).await.unwrap();
         let captured = log.lock().unwrap();

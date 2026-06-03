@@ -10,7 +10,7 @@
 //! supply, OTP hot-upgrades, sandbox capabilities, and secret
 //! materialization.
 
-use gen_platform::{catalog, TypedDispatcherTrait};
+use gen_platform::{TypedDispatcherTrait, catalog};
 use shigoto_types::RetryOutcome;
 
 #[test]
@@ -32,10 +32,7 @@ fn variant_fields_surfaced() {
     let fields = RetryOutcome::variant_fields();
     assert_eq!(
         fields,
-        vec![
-            ("retry", vec!["until_ms"]),
-            ("deadletter", vec![]),
-        ]
+        vec![("retry", vec!["until_ms"]), ("deadletter", vec![]),]
     );
 }
 

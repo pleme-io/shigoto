@@ -34,10 +34,9 @@ pub use shigoto_scheduler::{InProcessScheduler, Scheduler, SchedulerError};
 
 // ── Types (the foundation) ────────────────────────────────────────────
 pub use shigoto_types::{
-    advance, ErasedJob, GateAggregate, IllegalTransition, Job, JobError, JobId, JobInput,
-    JobKindId, JobOutput, JobPhase, JobScope, JobSubject, OutputSink, RecordingJob,
-    RetryOutcome, Signal, SkipReason, Snapshot, TickReceipt, TransitionEvent, TransitionReason,
-    UnhealedDrift,
+    ErasedJob, GateAggregate, IllegalTransition, Job, JobError, JobId, JobInput, JobKindId,
+    JobOutput, JobPhase, JobScope, JobSubject, OutputSink, RecordingJob, RetryOutcome, Signal,
+    SkipReason, Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift, advance,
 };
 
 #[cfg(test)]
@@ -79,8 +78,8 @@ mod tests {
         // Every type used here is re-exported by `shigoto::*` so a
         // consumer outside this workspace can write the exact same
         // imports.
-        let scheduler = InProcessScheduler::new("umbrella-smoke")
-            .with_emitter(Arc::new(NullEmitter::new()));
+        let scheduler =
+            InProcessScheduler::new("umbrella-smoke").with_emitter(Arc::new(NullEmitter::new()));
         let job = Arc::new(SmokeJob);
         let id = <SmokeJob as Job>::id(&job);
         scheduler.register_job(job).await;

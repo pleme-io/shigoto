@@ -77,21 +77,13 @@ impl BudgetTree {
             }
         }
         if let Some(spec) = self.by_kind.get(&id.kind) {
-            let running = self
-                .running_by_kind
-                .get(&id.kind)
-                .copied()
-                .unwrap_or(0);
+            let running = self.running_by_kind.get(&id.kind).copied().unwrap_or(0);
             if running >= spec.max_concurrent {
                 return Err(BudgetError::KindExhausted(id.kind.0.clone()));
             }
         }
         if let Some(spec) = self.by_scope.get(&id.scope) {
-            let running = self
-                .running_by_scope
-                .get(&id.scope)
-                .copied()
-                .unwrap_or(0);
+            let running = self.running_by_scope.get(&id.scope).copied().unwrap_or(0);
             if running >= spec.max_concurrent {
                 return Err(BudgetError::ScopeExhausted);
             }

@@ -148,10 +148,9 @@ mod tests {
             .with_rule(|s| s.contains("r").then_some(Color::Red))
             .with_rule(|s| s.contains("g").then_some(Color::Green));
 
-        assert_deterministic_over(
-            &["red", "green", "ranger", "neither", ""],
-            |&input| c.evaluate(input),
-        );
+        assert_deterministic_over(&["red", "green", "ranger", "neither", ""], |&input| {
+            c.evaluate(input)
+        });
     }
 
     #[test]

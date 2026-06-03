@@ -110,7 +110,10 @@ mod tests {
 
     #[test]
     fn single_layer_overrides_only_its_set_field() {
-        let layer = TestPolicy { a: Some(99), ..Default::default() };
+        let layer = TestPolicy {
+            a: Some(99),
+            ..Default::default()
+        };
         let r = TestPolicy::resolve(&[Some(&layer)], d());
         assert_eq!(r.a, Some(99));
         assert_eq!(r.b, d().b, "unset field preserved");
@@ -118,7 +121,10 @@ mod tests {
 
     #[test]
     fn innermost_wins_per_field_and_for_same_field() {
-        let outer = TestPolicy { a: Some(10), ..Default::default() };
+        let outer = TestPolicy {
+            a: Some(10),
+            ..Default::default()
+        };
         let inner = TestPolicy {
             a: Some(50),
             b: Some("inner".into()),
@@ -130,14 +136,20 @@ mod tests {
 
     #[test]
     fn none_layer_is_skipped() {
-        let inner = TestPolicy { a: Some(7), ..Default::default() };
+        let inner = TestPolicy {
+            a: Some(7),
+            ..Default::default()
+        };
         let r = TestPolicy::resolve(&[None, Some(&inner), None], TestPolicy::default());
         assert_eq!(r.a, Some(7));
     }
 
     #[test]
     fn merge_is_idempotent() {
-        let layer = TestPolicy { a: Some(99), ..Default::default() };
+        let layer = TestPolicy {
+            a: Some(99),
+            ..Default::default()
+        };
         let mut once = d();
         let mut twice = d();
         once.merge(&layer);
@@ -148,7 +160,10 @@ mod tests {
 
     #[test]
     fn resolve_is_deterministic() {
-        let l = TestPolicy { a: Some(3), ..Default::default() };
+        let l = TestPolicy {
+            a: Some(3),
+            ..Default::default()
+        };
         let refs = [Some(&l)];
         assert_eq!(
             TestPolicy::resolve(&refs, d()),
@@ -164,9 +179,18 @@ mod tests {
         crate::testing::assert_cascade_laws_with_default(
             d(),
             &[
-                TestPolicy { a: Some(10), ..Default::default() },
-                TestPolicy { b: Some("layer".into()), ..Default::default() },
-                TestPolicy { a: Some(50), b: Some("both".into()) },
+                TestPolicy {
+                    a: Some(10),
+                    ..Default::default()
+                },
+                TestPolicy {
+                    b: Some("layer".into()),
+                    ..Default::default()
+                },
+                TestPolicy {
+                    a: Some(50),
+                    b: Some("both".into()),
+                },
             ],
         );
     }

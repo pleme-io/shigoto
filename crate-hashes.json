@@ -1,0 +1,5 @@
+{
+  "git+https://github.com/pleme-io/gen#gen-macros@0.1.5": "0gdf44lwk58r6cx1qdgik6qannzwarj029khfs022fz6kwlvx279",
+  "git+https://github.com/pleme-io/gen#gen-platform@0.1.5": "0gdf44lwk58r6cx1qdgik6qannzwarj029khfs022fz6kwlvx279",
+  "git+https://github.com/pleme-io/gen#gen-types@0.1.5": "0gdf44lwk58r6cx1qdgik6qannzwarj029khfs022fz6kwlvx279"
+}

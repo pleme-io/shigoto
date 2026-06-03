@@ -87,7 +87,12 @@ impl Gate for AllUpstreamsTerminal {
 
     fn evaluate(&self, ctx: &GateContext) -> GateOutcome {
         for pred in ctx.dag.predecessors(ctx.job_id) {
-            let phase = ctx.snapshot.phases.get(&pred).cloned().unwrap_or(JobPhase::Pending);
+            let phase = ctx
+                .snapshot
+                .phases
+                .get(&pred)
+                .cloned()
+                .unwrap_or(JobPhase::Pending);
             if !is_terminal(&phase) {
                 return GateOutcome::Wait;
             }
@@ -107,10 +112,7 @@ pub struct OperatorApproved {
 }
 
 impl OperatorApproved {
-    pub fn new(
-        name: &'static str,
-        check: impl Fn() -> bool + Send + Sync + 'static,
-    ) -> Self {
+    pub fn new(name: &'static str, check: impl Fn() -> bool + Send + Sync + 'static) -> Self {
         Self {
             name,
             check: Box::new(check),

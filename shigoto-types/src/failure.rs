@@ -52,7 +52,14 @@ use serde::{Deserialize, Serialize};
 /// `is_declarative` (variant predicates) are auto-generated via
 /// `#[derive(Discriminant, IsVariant)]` from gen-platform.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
     gen_platform::Discriminant,
     gen_platform::IsVariant,
 )]
@@ -118,7 +125,11 @@ impl Failure {
         let kind = classify(raw);
         let message = truncate(raw, 256);
         let signature = signature(raw);
-        Self { kind, message, signature }
+        Self {
+            kind,
+            message,
+            signature,
+        }
     }
 }
 

@@ -18,7 +18,10 @@ use shigoto_types::FailureKind;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RetryPolicy {
     NoRetry,
-    Fixed { attempts: u32, delay_ms: u64 },
+    Fixed {
+        attempts: u32,
+        delay_ms: u64,
+    },
     Exponential {
         attempts: u32,
         base_ms: u64,
@@ -185,7 +188,10 @@ mod tests {
 
         // Even with generous Fixed/Exponential budgets, Declarative
         // short-circuits to Deadletter.
-        let fixed = RetryPolicy::Fixed { attempts: 100, delay_ms: 50 };
+        let fixed = RetryPolicy::Fixed {
+            attempts: 100,
+            delay_ms: 50,
+        };
         assert_eq!(
             fixed.decide(1, &[declarative.clone()]),
             RetryDecision::Deadletter
@@ -213,7 +219,10 @@ mod tests {
         );
 
         // Transient gets the policy's full retry budget.
-        let fixed = RetryPolicy::Fixed { attempts: 3, delay_ms: 100 };
+        let fixed = RetryPolicy::Fixed {
+            attempts: 3,
+            delay_ms: 100,
+        };
         match fixed.decide(1, &[transient.clone()]) {
             RetryDecision::Retry { .. } => (),
             d => panic!("expected Retry on Transient, got {d:?}"),
@@ -229,7 +238,10 @@ mod tests {
             FailureRecord::with_kind(2, 0, "blip", FailureKind::Transient),
             FailureRecord::with_kind(3, 0, "error: does not exist", FailureKind::Declarative),
         ];
-        let fixed = RetryPolicy::Fixed { attempts: 100, delay_ms: 50 };
+        let fixed = RetryPolicy::Fixed {
+            attempts: 100,
+            delay_ms: 50,
+        };
         assert_eq!(fixed.decide(3, &history), RetryDecision::Deadletter);
     }
 
@@ -238,7 +250,10 @@ mod tests {
         // Backwards compat — no failure history means existing
         // policy logic decides. This protects every existing
         // consumer that hasn't migrated to typed failure records.
-        let fixed = RetryPolicy::Fixed { attempts: 3, delay_ms: 100 };
+        let fixed = RetryPolicy::Fixed {
+            attempts: 3,
+            delay_ms: 100,
+        };
         match fixed.decide(1, &[]) {
             RetryDecision::Retry { .. } => (),
             d => panic!("expected Retry on empty history, got {d:?}"),

@@ -151,7 +151,11 @@ mod tests {
     #[test]
     fn fn_classifier_wraps_free_function() {
         let c = FnClassifier::new(|s: &str| {
-            if s == "red" { Color::Red } else { Color::Unknown }
+            if s == "red" {
+                Color::Red
+            } else {
+                Color::Unknown
+            }
         });
         assert_eq!(c.classify("red"), Color::Red);
         assert_eq!(c.classify("orange"), Color::Unknown);
@@ -202,8 +206,7 @@ mod tests {
             ChainedClassifier::new(|_| Color::Unknown)
                 .with_rule(|s: &str| s.contains("r").then_some(Color::Red)),
         );
-        let c2: Box<dyn Classifier<str, Color>> =
-            Box::new(FnClassifier::new(|_| Color::Green));
+        let c2: Box<dyn Classifier<str, Color>> = Box::new(FnClassifier::new(|_| Color::Green));
 
         assert_eq!(c1.classify("red"), Color::Red);
         assert_eq!(c2.classify("anything"), Color::Green);
@@ -244,7 +247,10 @@ mod tests {
         // The polymorphic surface: pass FailureClassifier as a
         // &dyn Classifier<str, FailureKind> to higher-level pipelines.
         let c: &dyn Classifier<str, FailureKind> = &FailureClassifier;
-        assert_eq!(c.classify("infinite recursion encountered"), FailureKind::Declarative);
+        assert_eq!(
+            c.classify("infinite recursion encountered"),
+            FailureKind::Declarative
+        );
         assert_eq!(c.classify("connection refused"), FailureKind::Transient);
     }
 }

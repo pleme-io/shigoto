@@ -119,12 +119,7 @@ impl<T> InMemorySink<T> {
 
     /// Take all events, clearing the buffer.
     pub fn drain(&self) -> Vec<T> {
-        std::mem::take(
-            &mut *self
-                .events
-                .lock()
-                .expect("InMemorySink mutex poisoned"),
-        )
+        std::mem::take(&mut *self.events.lock().expect("InMemorySink mutex poisoned"))
     }
 
     pub fn len(&self) -> usize {
@@ -215,9 +210,7 @@ impl<T: Serialize + Send + Sync> Sink<T> for AuditFileSink<T> {
                 // Audit serialization failure is operator-visible —
                 // surface via tracing but don't propagate (callers
                 // shouldn't have to handle audit-log errors).
-                eprintln!(
-                    "[shigoto-types::sink] AuditFileSink serialize failed: {err}",
-                );
+                eprintln!("[shigoto-types::sink] AuditFileSink serialize failed: {err}",);
             }
         }
     }
@@ -402,7 +395,7 @@ mod tests {
     fn multi_sink_empty_is_no_op() {
         let multi = MultiSink::<TestEvent>::new();
         assert!(multi.is_empty());
-        multi.record(&ev("a", 1));  // no children — drops silently
+        multi.record(&ev("a", 1)); // no children — drops silently
     }
 
     #[test]

@@ -311,9 +311,7 @@ mod tests {
 
     #[test]
     fn over_inputs_passes() {
-        assert_deterministic_over(&[0_u32, 1, 2, 100, u32::MAX], |&x| {
-            x.wrapping_mul(7)
-        });
+        assert_deterministic_over(&[0_u32, 1, 2, 100, u32::MAX], |&x| x.wrapping_mul(7));
     }
 
     #[test]
@@ -348,9 +346,18 @@ mod tests {
                 b: Some("base".into()),
             },
             &[
-                GoodPolicy { a: Some(1), ..Default::default() },
-                GoodPolicy { b: Some("x".into()), ..Default::default() },
-                GoodPolicy { a: Some(9), b: Some("y".into()) },
+                GoodPolicy {
+                    a: Some(1),
+                    ..Default::default()
+                },
+                GoodPolicy {
+                    b: Some("x".into()),
+                    ..Default::default()
+                },
+                GoodPolicy {
+                    a: Some(9),
+                    b: Some("y".into()),
+                },
             ],
         );
     }
@@ -378,7 +385,10 @@ mod tests {
     fn cascade_harness_catches_a_non_idempotent_impl() {
         assert_cascade_laws(
             NonIdempotentPolicy::default(),
-            &[NonIdempotentPolicy { a: Some(5), ..Default::default() }],
+            &[NonIdempotentPolicy {
+                a: Some(5),
+                ..Default::default()
+            }],
         );
     }
 

@@ -312,7 +312,9 @@ mod tests {
             WatchAction::Alert(routing_to("compile-stuck")),
         );
         match w.evaluate(&Phase::Compiling, t(0), t(300)) {
-            Some(WatchAction::Alert(r)) => assert_eq!(r.ntfy_topic.as_deref(), Some("compile-stuck")),
+            Some(WatchAction::Alert(r)) => {
+                assert_eq!(r.ntfy_topic.as_deref(), Some("compile-stuck"))
+            }
             other => panic!("expected Alert, got {other:?}"),
         }
     }
@@ -429,10 +431,9 @@ mod tests {
         // Same inputs → same output, every time. The helper does
         // full-equality (PartialEq) — strictly stronger than the
         // legacy `.is_some()` check.
-        crate::testing::assert_deterministic_over(
-            &[0_i64, 30, 59, 60, 61, 1000],
-            |&elapsed_s| w.evaluate(&Phase::Compiling, t(0), t(elapsed_s)),
-        );
+        crate::testing::assert_deterministic_over(&[0_i64, 30, 59, 60, 61, 1000], |&elapsed_s| {
+            w.evaluate(&Phase::Compiling, t(0), t(elapsed_s))
+        });
     }
 
     // ── ScheduleWindow tests ──────────────────────────────────────
@@ -526,7 +527,13 @@ mod tests {
     #[test]
     fn schedule_window_zero_window_only_fires_at_exact_moment() {
         let s = ScheduleWindow::new("* * * * *").with_window(Duration::ZERO);
-        assert!(s.is_in_window(t(1000), t(1000)), "zero window is exactly the scheduled instant");
-        assert!(!s.is_in_window(t(1000), t(1001)), "one second past is already closed");
+        assert!(
+            s.is_in_window(t(1000), t(1000)),
+            "zero window is exactly the scheduled instant"
+        );
+        assert!(
+            !s.is_in_window(t(1000), t(1001)),
+            "one second past is already closed"
+        );
     }
 }
