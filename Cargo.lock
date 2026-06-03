@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "shigoto-budget",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-budget"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "shigoto-types",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-dag"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "petgraph",
  "serde",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-emit"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-gate"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "shigoto-dag",
  "shigoto-types",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-retry"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "shigoto-types",
@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-scheduler"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-test"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "shigoto-scheduler",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "shigoto-types"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "chrono",
