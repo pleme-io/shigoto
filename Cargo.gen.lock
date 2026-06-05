@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cargo_lock_sha256": "5026579b61d62555982cdd806aa10723008469f9a99ac7a423d125b28847dedb",
+  "cargo_lock_sha256": "498b7e1b4bdaa54012b7a7587276bf33cec6c98e0c30ea5e81e4decb1be84958",
   "target_resolves": {
     "base": {
       "anyhow-1.0.102": {
@@ -520,6 +520,15 @@
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
+      },
+      "hex-0.4.3": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "default",
+          "std"
+        ]
       },
       "indexmap-2.14.0": {
         "runtime_dependencies": [
@@ -1447,6 +1456,16 @@
             "tree": "host"
           },
           {
+            "name": "blake3",
+            "package_key": "blake3-1.8.5",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "chrono",
             "package_key": "chrono-0.4.44",
             "kind": "normal",
@@ -1471,6 +1490,16 @@
           {
             "name": "gen_types",
             "package_key": "gen-types-0.1.8",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "hex",
+            "package_key": "hex-0.4.3",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3016,6 +3045,9 @@
     },
     "hashbrown-0.17.1": {
       "edition": "2024"
+    },
+    "hex-0.4.3": {
+      "edition": "2018"
     },
     "iana-time-zone-0.1.65": {
       "edition": "2021"
