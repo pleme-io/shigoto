@@ -36,6 +36,8 @@ petgraph = { version = "0.6" }
 tracing = { version = "0.1" }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = { version = "1" }
+blake3 = { version = "1" }
+hex = { version = "0.4" }
 tempfile = { version = "3" }
 
 [workspace.lints]

@@ -35,6 +35,16 @@ pub mod policy;
 pub use policy::CascadePolicy;
 pub mod decision;
 pub use decision::Decision;
+// `converge` — the universal Reconciler trait + typed Plan/Outcome border,
+// RE-HOMED from magma-converge (the third leg of the CascadePolicy/Decision
+// arc). Serde-only; completes shigoto-types as the single home for the whole
+// convergence-primitive family. magma-converge re-exports it for back-compat.
+pub mod converge;
+pub use converge::{
+    Action, AppliedChange, ApplyMetrics, Change, ChangeSeverity, FailedChange, NoMetrics, Outcome,
+    Plan, PlanId, Reconciler, ReconcilerError, SharedReconciler, build_outcome, change,
+    change_with_severity,
+};
 
 pub mod testing;
 
