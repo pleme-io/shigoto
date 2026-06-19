@@ -546,6 +546,7 @@ dependencies = [
  "shigoto-dag",
  "shigoto-emit",
  "shigoto-gate",
+ "shigoto-rank",
  "shigoto-retry",
  "shigoto-scheduler",
  "shigoto-types",

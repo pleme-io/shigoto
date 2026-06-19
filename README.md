@@ -30,7 +30,8 @@ shigoto              — umbrella; re-exports the public surface
 shigoto-types        — Job, JobId, JobPhase, JobKindId, TickReceipt, ...
 shigoto-dag          — Dag + DagError (typed dependency graph)
 shigoto-scheduler    — Scheduler trait + InProcessScheduler
-shigoto-budget       — BudgetTree, BudgetSpec, BudgetError
+shigoto-budget       — BudgetTree, BudgetSpec, BudgetError (HOW MUCH runs)
+shigoto-rank         — Schedulable trait + rank/pick (WHICH runs next; anti-starvation)
 shigoto-retry        — RetryPolicy, RetryDecider trait
 shigoto-gate         — Gate trait + standard gates
 shigoto-emit         — TransitionEmitter trait + sinks

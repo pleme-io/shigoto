@@ -15,6 +15,7 @@ shigoto-types.workspace = true
 shigoto-dag.workspace = true
 shigoto-scheduler.workspace = true
 shigoto-budget.workspace = true
+shigoto-rank.workspace = true
 shigoto-retry.workspace = true
 shigoto-gate.workspace = true
 shigoto-emit.workspace = true

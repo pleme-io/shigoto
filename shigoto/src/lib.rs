@@ -10,8 +10,11 @@
 
 #![forbid(unsafe_code)]
 
-// ── Budget ────────────────────────────────────────────────────────────
+// ── Budget (HOW MUCH runs at once) ──────────────────────────────────────
 pub use shigoto_budget::{BudgetError, BudgetSpec, BudgetTree};
+
+// ── Rank (WHICH runs next; anti-starvation ordering) ────────────────────
+pub use shigoto_rank::{pick, rank, PriorityClass, Schedulable, UrgencyWeights};
 
 // ── DAG ───────────────────────────────────────────────────────────────
 pub use shigoto_dag::{Dag, DagError};
