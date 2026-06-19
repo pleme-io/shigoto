@@ -595,6 +595,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shigoto-rank"
+version = "0.1.7"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "shigoto-retry"
 version = "0.1.7"
 dependencies = [
