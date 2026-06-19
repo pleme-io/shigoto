@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cargo_lock_sha256": "c8aae57f83510f37b516417077af39c2d5f2a3bdd7d05ac44ab84922a3383e76",
+  "cargo_lock_sha256": "a7fa0dcfc622d0c5c59d61490b3427c0ef5f6b6f6f4d12f95315060910389961",
   "target_resolves": {
     "base": {
       "anyhow-1.0.102": {
@@ -979,11 +979,11 @@
           "std"
         ]
       },
-      "shigoto-0.1.7": {
+      "shigoto-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "shigoto_budget",
-            "package_key": "shigoto-budget-0.1.7",
+            "package_key": "shigoto-budget-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -993,7 +993,7 @@
           },
           {
             "name": "shigoto_dag",
-            "package_key": "shigoto-dag-0.1.7",
+            "package_key": "shigoto-dag-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1003,7 +1003,7 @@
           },
           {
             "name": "shigoto_emit",
-            "package_key": "shigoto-emit-0.1.7",
+            "package_key": "shigoto-emit-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1013,7 +1013,7 @@
           },
           {
             "name": "shigoto_gate",
-            "package_key": "shigoto-gate-0.1.7",
+            "package_key": "shigoto-gate-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1023,7 +1023,7 @@
           },
           {
             "name": "shigoto_rank",
-            "package_key": "shigoto-rank-0.1.7",
+            "package_key": "shigoto-rank-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1033,7 +1033,7 @@
           },
           {
             "name": "shigoto_retry",
-            "package_key": "shigoto-retry-0.1.7",
+            "package_key": "shigoto-retry-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1043,7 +1043,7 @@
           },
           {
             "name": "shigoto_scheduler",
-            "package_key": "shigoto-scheduler-0.1.7",
+            "package_key": "shigoto-scheduler-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1053,7 +1053,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1065,7 +1065,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-budget-0.1.7": {
+      "shigoto-budget-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "serde",
@@ -1081,7 +1081,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1103,7 +1103,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-dag-0.1.7": {
+      "shigoto-dag-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "petgraph",
@@ -1129,7 +1129,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1151,7 +1151,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-emit-0.1.7": {
+      "shigoto-emit-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "async_trait",
@@ -1187,7 +1187,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1209,11 +1209,11 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-gate-0.1.7": {
+      "shigoto-gate-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "shigoto_dag",
-            "package_key": "shigoto-dag-0.1.7",
+            "package_key": "shigoto-dag-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1223,7 +1223,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1235,7 +1235,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-rank-0.1.7": {
+      "shigoto-rank-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "serde",
@@ -1253,7 +1253,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-retry-0.1.7": {
+      "shigoto-retry-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "serde",
@@ -1269,7 +1269,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1281,7 +1281,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-scheduler-0.1.7": {
+      "shigoto-scheduler-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "anyhow",
@@ -1317,7 +1317,7 @@
           },
           {
             "name": "shigoto_budget",
-            "package_key": "shigoto-budget-0.1.7",
+            "package_key": "shigoto-budget-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1327,7 +1327,7 @@
           },
           {
             "name": "shigoto_dag",
-            "package_key": "shigoto-dag-0.1.7",
+            "package_key": "shigoto-dag-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1337,7 +1337,7 @@
           },
           {
             "name": "shigoto_emit",
-            "package_key": "shigoto-emit-0.1.7",
+            "package_key": "shigoto-emit-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1347,7 +1347,7 @@
           },
           {
             "name": "shigoto_gate",
-            "package_key": "shigoto-gate-0.1.7",
+            "package_key": "shigoto-gate-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1357,7 +1357,7 @@
           },
           {
             "name": "shigoto_retry",
-            "package_key": "shigoto-retry-0.1.7",
+            "package_key": "shigoto-retry-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1367,7 +1367,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1414,7 +1414,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-test-0.1.7": {
+      "shigoto-test-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "async_trait",
@@ -1428,7 +1428,7 @@
           },
           {
             "name": "shigoto_scheduler",
-            "package_key": "shigoto-scheduler-0.1.7",
+            "package_key": "shigoto-scheduler-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1438,7 +1438,7 @@
           },
           {
             "name": "shigoto_types",
-            "package_key": "shigoto-types-0.1.7",
+            "package_key": "shigoto-types-0.1.8",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1475,7 +1475,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "shigoto-types-0.1.7": {
+      "shigoto-types-0.1.8": {
         "runtime_dependencies": [
           {
             "name": "async_trait",
@@ -3206,70 +3206,70 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "shigoto-0.1.7": {
+    "shigoto-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-budget-0.1.7": {
+    "shigoto-budget-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_budget",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-dag-0.1.7": {
+    "shigoto-dag-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_dag",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-emit-0.1.7": {
+    "shigoto-emit-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_emit",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-gate-0.1.7": {
+    "shigoto-gate-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_gate",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-rank-0.1.7": {
+    "shigoto-rank-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_rank",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-retry-0.1.7": {
+    "shigoto-retry-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_retry",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-scheduler-0.1.7": {
+    "shigoto-scheduler-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_scheduler",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-test-0.1.7": {
+    "shigoto-test-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_test",
         "path": "src/lib.rs"
       }
     },
-    "shigoto-types-0.1.7": {
+    "shigoto-types-0.1.8": {
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_types",
