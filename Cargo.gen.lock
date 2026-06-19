@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cargo_lock_sha256": "a7fa0dcfc622d0c5c59d61490b3427c0ef5f6b6f6f4d12f95315060910389961",
+  "cargo_lock_sha256": "b3afbaf572bfc367b9de8189c49f98e32a848c09278eaeed47906c8df8bea60d",
   "target_resolves": {
     "base": {
       "anyhow-1.0.102": {
@@ -1012,6 +1012,16 @@
             "tree": "target"
           },
           {
+            "name": "shigoto_fsm",
+            "package_key": "shigoto-fsm-0.1.8",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "shigoto_gate",
             "package_key": "shigoto-gate-0.1.8",
             "kind": "normal",
@@ -1206,6 +1216,11 @@
             "tree": "target"
           }
         ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "shigoto-fsm-0.1.8": {
+        "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
       },
@@ -3231,6 +3246,13 @@
       "edition": "2024",
       "lib_target": {
         "name": "shigoto_emit",
+        "path": "src/lib.rs"
+      }
+    },
+    "shigoto-fsm-0.1.8": {
+      "edition": "2024",
+      "lib_target": {
+        "name": "shigoto_fsm",
         "path": "src/lib.rs"
       }
     },
