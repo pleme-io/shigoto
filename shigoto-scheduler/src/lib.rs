@@ -257,6 +257,23 @@ impl Scheduler for InProcessScheduler {
         // start their pass-1 transitions until wave 1's pass-3 has
         // landed terminal phases for their upstreams. Within a wave,
         // execution is fully concurrent.
+        //
+        // INTRA-WAVE ORDERING MILESTONE (shigoto-rank): today PASS 1 walks
+        // `wave` in `dag.waves()` order and allocates budget greedily
+        // (`try_allocate` below). When a wave has more Ready jobs than budget
+        // slots — the 100k-pending case — *which* jobs win is arbitrary, not
+        // most-value-first. The destination is to order each wave by
+        // `shigoto_rank::rank` before PASS 1 so the highest priority × urgency ×
+        // fairness-deficit jobs allocate first and the rest wait for the next
+        // tick (the anti-starvation guarantee, fleet-wide). Prerequisites the
+        // scheduler doesn't track yet: (1) per-Job priority metadata (a
+        // `PriorityClass` on Job/JobKind), and (2) per-Job timing — last-advanced
+        // timestamps (the `age_seconds = 0` gap at `collect_unhealed`) plus a
+        // passed-over counter to feed `fairness_deficit`. Land those two, impl
+        // `shigoto_rank::Schedulable` for the wave entries, then
+        // `rank(&wave, now, &weights)` here. Until then the seam is named, not
+        // faked — a default-everything rank would degenerate to stable-id order
+        // and change nothing while churning the hot path.
         for wave in waves {
             // PASS 1: fast FSM transitions.
             for id in &wave {
