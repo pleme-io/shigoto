@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cargo_lock_sha256": "71b8cadb6a3c54783d614fd23f8b35c0209a48e0d1a4b928fd6fb320cabbe026",
+  "cargo_lock_sha256": "c8aae57f83510f37b516417077af39c2d5f2a3bdd7d05ac44ab84922a3383e76",
   "target_resolves": {
     "base": {
       "anyhow-1.0.102": {
@@ -1014,6 +1014,16 @@
           {
             "name": "shigoto_gate",
             "package_key": "shigoto-gate-0.1.7",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "shigoto_rank",
+            "package_key": "shigoto-rank-0.1.7",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
