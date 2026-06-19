@@ -16,6 +16,9 @@ pub use shigoto_budget::{BudgetError, BudgetSpec, BudgetTree};
 // ── Rank (WHICH runs next; anti-starvation ordering) ────────────────────
 pub use shigoto_rank::{pick, rank, PriorityClass, Schedulable, UrgencyWeights};
 
+// ── FSM (typed-lifecycle convergence proofs) ────────────────────────────
+pub use shigoto_fsm::{assert_convergent_fsm, ConvergentFsm, DefectKind, FsmDefect};
+
 // ── DAG ───────────────────────────────────────────────────────────────
 pub use shigoto_dag::{Dag, DagError};
 

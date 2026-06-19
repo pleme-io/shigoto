@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["shigoto", "shigoto-types", "shigoto-dag", "shigoto-scheduler", "shigoto-budget", "shigoto-rank", "shigoto-retry", "shigoto-gate", "shigoto-emit", "shigoto-test"]
+members = ["shigoto", "shigoto-types", "shigoto-dag", "shigoto-scheduler", "shigoto-budget", "shigoto-rank", "shigoto-fsm", "shigoto-retry", "shigoto-gate", "shigoto-emit", "shigoto-test"]
 
 [workspace.package]
 version = "0.1.8"
@@ -17,6 +17,7 @@ shigoto-dag = { version = "0.1.0", path = "shigoto-dag" }
 shigoto-scheduler = { version = "0.1.0", path = "shigoto-scheduler" }
 shigoto-budget = { version = "0.1.0", path = "shigoto-budget" }
 shigoto-rank = { version = "0.1.0", path = "shigoto-rank" }
+shigoto-fsm = { version = "0.1.0", path = "shigoto-fsm" }
 shigoto-retry = { version = "0.1.0", path = "shigoto-retry" }
 shigoto-gate = { version = "0.1.0", path = "shigoto-gate" }
 shigoto-emit = { version = "0.1.0", path = "shigoto-emit" }

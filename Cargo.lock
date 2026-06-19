@@ -545,6 +545,7 @@ dependencies = [
  "shigoto-budget",
  "shigoto-dag",
  "shigoto-emit",
+ "shigoto-fsm",
  "shigoto-gate",
  "shigoto-rank",
  "shigoto-retry",
@@ -586,6 +587,10 @@ dependencies = [
  "tokio",
  "tracing",
 ]
+
+[[package]]
+name = "shigoto-fsm"
+version = "0.1.7"
 
 [[package]]
 name = "shigoto-gate"

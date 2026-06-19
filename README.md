@@ -32,6 +32,7 @@ shigoto-dag          — Dag + DagError (typed dependency graph)
 shigoto-scheduler    — Scheduler trait + InProcessScheduler
 shigoto-budget       — BudgetTree, BudgetSpec, BudgetError (HOW MUCH runs)
 shigoto-rank         — Schedulable trait + rank/pick (WHICH runs next; anti-starvation)
+shigoto-fsm          — ConvergentFsm trait + proof harness (every state reaches a good terminal)
 shigoto-retry        — RetryPolicy, RetryDecider trait
 shigoto-gate         — Gate trait + standard gates
 shigoto-emit         — TransitionEmitter trait + sinks

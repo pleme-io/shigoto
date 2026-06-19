@@ -1,0 +1,13 @@
+[package]
+name = "shigoto-fsm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "shigoto — typed state-machine convergence proofs (every reachable state reaches a good terminal) as a trait + reusable forcing-function harness."
+
+[lints]
+workspace = true
+
+[dependencies]
