@@ -55,6 +55,27 @@ pub trait ConvergentFsm: Copy + Eq + Hash + std::fmt::Debug + 'static {
     /// `self` is a *good* terminal — a successful end (vs a failure sink). Only
     /// meaningful when [`is_terminal`](ConvergentFsm::is_terminal) is true.
     fn is_good_terminal(&self) -> bool;
+
+    /// `self` is a GOOD RESTING STATE — a state the FSM is allowed to converge to
+    /// and rest in, whether or not it is an absorbing sink. This is the
+    /// destination the convergence proof requires every state to reach.
+    ///
+    /// Two FSM shapes, one proof:
+    /// - **Absorbing FSMs** (e.g. a resource-admission FSM whose ends are
+    ///   retire/reject/timeout sinks): a good resting state IS a good terminal —
+    ///   the default below, so absorbing consumers implement nothing extra.
+    /// - **Cyclic reconcile FSMs** (e.g. an operator lifecycle with a re-entrant
+    ///   `Ready` that has a `Ready → Drifted` drift edge): the good resting state
+    ///   `Ready` is NOT a sink — it has successors. Such consumers override this to
+    ///   return `true` for their good *resting* states (which are not terminals),
+    ///   while `is_terminal` stays reserved for true sinks. Convergence then means
+    ///   "every state can reach a good resting state", which is exactly the
+    ///   reconcile guarantee (every state can get back to converged/`Ready`).
+    ///
+    /// Default: a good resting state is exactly a good terminal (absorbing model).
+    fn is_good_resting_state(&self) -> bool {
+        self.is_good_terminal()
+    }
 }
 
 /// A single convergence-proof failure, with a message naming the offending state.
@@ -140,22 +161,27 @@ pub fn check_no_traps<F: ConvergentFsm>() -> Vec<FsmDefect> {
     defects
 }
 
-/// From every state, a good terminal is reachable over the legal edges (BFS).
-/// The core convergence claim.
+/// From every state, a good RESTING STATE is reachable over the legal edges
+/// (DFS). The core convergence claim — and it works for both FSM shapes: for an
+/// absorbing FSM the resting state is a good terminal (the default); for a cyclic
+/// reconcile FSM it is a re-entrant good state like `Ready` (see
+/// [`ConvergentFsm::is_good_resting_state`]).
 pub fn check_all_converge<F: ConvergentFsm>() -> Vec<FsmDefect> {
     let mut defects = Vec::new();
     for &start in F::all() {
         if !reaches_good_terminal(start) {
             defects.push(FsmDefect {
                 kind: DefectKind::CannotConverge,
-                message: format!("{start:?} cannot reach any good terminal — stuck state"),
+                message: format!("{start:?} cannot reach any good resting state — stuck state"),
             });
         }
     }
     defects
 }
 
-/// Does a good terminal lie on some path out of `start`? (DFS over the closure.)
+/// Does a good RESTING STATE lie on some path out of `start`? (DFS over the
+/// closure.) Counts any state where [`ConvergentFsm::is_good_resting_state`]
+/// holds — a good terminal sink (default) OR a re-entrant good state.
 pub fn reaches_good_terminal<F: ConvergentFsm>(start: F) -> bool {
     let mut seen: HashSet<F> = HashSet::new();
     let mut stack = vec![start];
@@ -163,7 +189,7 @@ pub fn reaches_good_terminal<F: ConvergentFsm>(start: F) -> bool {
         if !seen.insert(s) {
             continue;
         }
-        if s.is_good_terminal() {
+        if s.is_good_resting_state() {
             return true;
         }
         stack.extend(s.successors());
@@ -354,5 +380,89 @@ mod tests {
     #[test]
     fn closed_graph_holds_for_the_reference() {
         assert!(check_graph_closed::<Good>().is_empty());
+    }
+
+    // ── Cyclic reconcile FSM: re-entrant good resting state (the operator shape) ──
+    /// `Ready` is a GOOD RESTING STATE that is NOT a sink — it has a `Ready→Drifted`
+    /// drift edge. The only absorbing terminal is `Gone`. This is the
+    /// operator-lifecycle shape, which the absorbing model couldn't express.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    enum Reconcile {
+        Pending,
+        Working,
+        Ready,   // GOOD RESTING STATE, re-entrant (Ready→Drifted), NOT a sink
+        Drifted, // recovery loop back to Working
+        Failed,  // recoverable failure (retry → Working)
+        Gone,    // the one absorbing good terminal (deleted)
+    }
+    impl ConvergentFsm for Reconcile {
+        fn all() -> &'static [Self] {
+            &[Reconcile::Pending, Reconcile::Working, Reconcile::Ready, Reconcile::Drifted, Reconcile::Failed, Reconcile::Gone]
+        }
+        fn successors(&self) -> Vec<Self> {
+            match self {
+                Reconcile::Pending => vec![Reconcile::Working, Reconcile::Gone],
+                Reconcile::Working => vec![Reconcile::Ready, Reconcile::Failed, Reconcile::Gone],
+                Reconcile::Ready => vec![Reconcile::Drifted, Reconcile::Gone], // re-entrant good state WITH successors
+                Reconcile::Drifted => vec![Reconcile::Working, Reconcile::Gone],
+                Reconcile::Failed => vec![Reconcile::Working, Reconcile::Gone],
+                Reconcile::Gone => vec![],
+            }
+        }
+        fn is_terminal(&self) -> bool {
+            matches!(self, Reconcile::Gone) // ONLY the sink — Ready is not a terminal
+        }
+        fn is_good_terminal(&self) -> bool {
+            matches!(self, Reconcile::Gone)
+        }
+        // The override that makes the cyclic shape work: Ready is a good place to
+        // rest even though it has outgoing edges.
+        fn is_good_resting_state(&self) -> bool {
+            matches!(self, Reconcile::Ready | Reconcile::Gone)
+        }
+    }
+
+    #[test]
+    fn cyclic_fsm_with_a_reentrant_good_state_converges() {
+        // Every state reaches Ready (re-entrant good) or Gone (sink); Ready having
+        // a successor must NOT make this fail (the absorbing model would have).
+        assert_convergent_fsm::<Reconcile>()
+            .expect("a cyclic reconcile FSM with a re-entrant good resting state must be convergent");
+        // Ready is reachable-as-resting from every state, though it is not a terminal.
+        assert!(reaches_good_terminal(Reconcile::Drifted));
+        assert!(!Reconcile::Ready.is_terminal(), "Ready is a resting state, not a sink");
+        assert!(Reconcile::Ready.is_good_resting_state());
+    }
+
+    /// A cyclic FSM with a NON-good cycle and no escape still fails convergence —
+    /// the re-entrant relaxation didn't weaken the proof.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    enum Stuck {
+        Spin,    // Spin→Churn→Spin, never reaches Done
+        Churn,
+        Done,
+    }
+    impl ConvergentFsm for Stuck {
+        fn all() -> &'static [Self] {
+            &[Stuck::Spin, Stuck::Churn, Stuck::Done]
+        }
+        fn successors(&self) -> Vec<Self> {
+            match self {
+                Stuck::Spin => vec![Stuck::Churn],
+                Stuck::Churn => vec![Stuck::Spin],
+                Stuck::Done => vec![],
+            }
+        }
+        fn is_terminal(&self) -> bool {
+            matches!(self, Stuck::Done)
+        }
+        fn is_good_terminal(&self) -> bool {
+            matches!(self, Stuck::Done)
+        }
+    }
+    #[test]
+    fn a_non_good_cycle_still_fails_convergence() {
+        let d = check_all_converge::<Stuck>();
+        assert!(d.iter().filter(|x| x.kind == DefectKind::CannotConverge).count() >= 2, "Spin+Churn never reach Done");
     }
 }
