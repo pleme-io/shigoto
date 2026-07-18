@@ -95,7 +95,11 @@ pub enum RetryDecision {
     Deadletter,
 }
 
-#[derive(Debug, Clone)]
+/// Serialize/Deserialize so a `FailureRecord` round-trips through a
+/// durable store (e.g. `shigoto_scheduler::SchedulerStore`) across a
+/// restart — every field is already serde-safe (`FailureKind` derives
+/// it too), so this is a pure additive derive, not a shape change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailureRecord {
     pub attempt: u32,
     pub at_ms: i64,

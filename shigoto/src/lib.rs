@@ -36,7 +36,10 @@ pub use shigoto_gate::{
 pub use shigoto_retry::{FailureRecord, RetryDecider, RetryDecision, RetryPolicy};
 
 // ── Scheduler ─────────────────────────────────────────────────────────
-pub use shigoto_scheduler::{InProcessScheduler, Scheduler, SchedulerError};
+pub use shigoto_scheduler::{
+    Clock, FixedClock, InProcessScheduler, JsonFileSchedulerStore, Scheduler, SchedulerError,
+    SchedulerSnapshot, SchedulerStore, SchedulerStoreError, StoredJobState, SystemClock,
+};
 
 // ── Types (the foundation) ────────────────────────────────────────────
 pub use shigoto_types::{

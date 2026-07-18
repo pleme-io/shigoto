@@ -25,6 +25,14 @@ use shigoto_types::{
     Snapshot, TickReceipt, TransitionEvent, TransitionReason, UnhealedDrift, advance,
 };
 
+mod clock;
+mod store;
+
+pub use clock::{Clock, FixedClock, SystemClock};
+pub use store::{
+    JsonFileSchedulerStore, SchedulerSnapshot, SchedulerStore, SchedulerStoreError, StoredJobState,
+};
+
 #[derive(thiserror::Error, Debug)]
 pub enum SchedulerError {
     #[error("dag toposort failed: {0}")]
@@ -90,6 +98,12 @@ pub struct InProcessScheduler {
     budget: tokio::sync::Mutex<BudgetTree>,
     tool: String,
     emitter: Arc<dyn TransitionEmitter>,
+    /// Time source for every wall-clock read inside the FSM driver
+    /// (backoff-elapsed checks, retry `until_ms` computation, transition
+    /// timestamps). Defaults to `SystemClock`; tests inject `FixedClock`
+    /// via `with_clock` to assert backoff/retry timing without a real
+    /// sleep. See `clock` module doc.
+    clock: Arc<dyn Clock>,
 }
 
 struct SchedulerState {
@@ -135,6 +149,7 @@ impl InProcessScheduler {
             budget: tokio::sync::Mutex::new(BudgetTree::new()),
             tool: tool.into(),
             emitter: Arc::new(NullEmitter::new()),
+            clock: Arc::new(SystemClock),
         }
     }
 
@@ -170,6 +185,17 @@ impl InProcessScheduler {
     #[must_use]
     pub fn with_emitter(mut self, emitter: Arc<dyn TransitionEmitter>) -> Self {
         self.emitter = emitter;
+        self
+    }
+
+    /// Replace the default `SystemClock` with an injected time source —
+    /// typically `Arc::new(FixedClock::new(..))` in tests that need to
+    /// assert backoff/retry timing deterministically, without a real
+    /// `tokio::time::sleep`. Production code has no reason to call this;
+    /// `SystemClock` is correct there.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -218,7 +244,7 @@ impl InProcessScheduler {
         // produce "manual transition"). Audit log + observability
         // sinks see operator context immediately.
         let event = TransitionEvent {
-            at: chrono::Utc::now(),
+            at: self.clock.now(),
             job_id: id.clone(),
             from,
             to,
@@ -228,12 +254,51 @@ impl InProcessScheduler {
         self.emitter.emit(&event);
         Ok(())
     }
+
+    /// Project the scheduler's live FSM state into a durable
+    /// [`SchedulerSnapshot`] — phase + attempt + failure-history
+    /// bookkeeping for every known job. Hand the result to a
+    /// [`SchedulerStore::save`] to persist it. Does NOT include Job
+    /// executables, Gates, or RetryPolicies — see the `store` module
+    /// doc for why.
+    pub async fn snapshot_state(&self) -> SchedulerSnapshot {
+        let state = self.state.read().await;
+        store::project(&state.phases, &state.attempts, &state.failure_history)
+    }
+
+    /// Overlay a previously-saved [`SchedulerSnapshot`] onto the
+    /// scheduler's current state — the restart-recovery half of
+    /// [`InProcessScheduler::snapshot_state`]. Safe to call before or
+    /// after `register_job`: this always unconditionally overwrites the
+    /// phase/attempts/failure-history entries it carries, and
+    /// `register_job`'s own `Pending` seed only applies when nothing is
+    /// present yet, so the two never race for the same job regardless of
+    /// call order.
+    ///
+    /// A job present in the snapshot but never (re-)registered this run
+    /// has no executable behind it — the next tick will find no
+    /// `Job` in `state.jobs` for it and deadletter it, same as any other
+    /// unregistered job. Restoring a snapshot doesn't magically restore
+    /// the executable graph; the consumer must re-register every Job it
+    /// still wants to run.
+    pub async fn restore_state(&self, snapshot: SchedulerSnapshot) {
+        let mut state = self.state.write().await;
+        for job in snapshot.jobs {
+            state.phases.insert(job.id.clone(), job.phase);
+            if job.attempts > 0 {
+                state.attempts.insert(job.id.clone(), job.attempts);
+            }
+            if !job.failure_history.is_empty() {
+                state.failure_history.insert(job.id, job.failure_history);
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl Scheduler for InProcessScheduler {
     async fn tick(&self, dag: &mut Dag) -> Result<TickReceipt, SchedulerError> {
-        let started_at = chrono::Utc::now();
+        let started_at = self.clock.now();
         let waves = dag.waves(None)?;
         let mut transitions: Vec<TransitionEvent> = Vec::new();
 
@@ -394,7 +459,7 @@ impl InProcessScheduler {
             // Retrying: wait for the backoff window to elapse, then
             // BackoffElapsed → Pending (cycle restart).
             JobPhase::Retrying { until_ms } => {
-                let now_ms = chrono::Utc::now().timestamp_millis();
+                let now_ms = self.clock.now().timestamp_millis();
                 if now_ms < *until_ms {
                     return Ok(false);
                 }
@@ -456,7 +521,7 @@ impl InProcessScheduler {
         match policy.decide(attempt, &history) {
             RetryDecision::Deadletter => RetryOutcome::Deadletter,
             RetryDecision::Retry { after } => {
-                let now_ms = chrono::Utc::now().timestamp_millis();
+                let now_ms = self.clock.now().timestamp_millis();
                 let until_ms = now_ms + after.as_millis() as i64;
                 RetryOutcome::Retry { until_ms }
             }
@@ -515,7 +580,7 @@ impl InProcessScheduler {
         state.phases.insert(id.clone(), to.clone());
 
         let event = TransitionEvent {
-            at: chrono::Utc::now(),
+            at: self.clock.now(),
             job_id: id.clone(),
             from,
             to,
@@ -626,7 +691,7 @@ impl InProcessScheduler {
                     // conservative "keep trying per policy" choice.
                     history.push(FailureRecord::new(
                         attempt,
-                        chrono::Utc::now().timestamp_millis(),
+                        self.clock.now().timestamp_millis(),
                         "execute() returned Err",
                     ));
                     if history.len() > 16 {
@@ -1334,5 +1399,163 @@ mod tests {
         assert_eq!(captured.len(), 3);
         assert_eq!(captured[0].from, JobPhase::Pending);
         assert_eq!(captured[2].to, JobPhase::Succeeded);
+    }
+
+    /// Load-bearing proof for the injectable `Clock`: a job's retry
+    /// backoff window is driven entirely by `FixedClock`, with ZERO real
+    /// `tokio::time::sleep`. Without `with_clock`, testing a multi-second
+    /// backoff window deterministically would require either sleeping
+    /// for real (slow, flaky under CI load) or shrinking the delay to
+    /// something near-zero (which stops testing the "stay put until the
+    /// window elapses" behavior at all). `FixedClock::advance` lets the
+    /// test assert both halves: the job holds in `Retrying` while the
+    /// clock hasn't moved, and proceeds the instant it has — synchronously,
+    /// with no wall-clock time elapsed.
+    #[tokio::test]
+    async fn fixed_clock_drives_retry_backoff_deterministically_without_sleeping() {
+        let clock = Arc::new(FixedClock::new(chrono::Utc::now()));
+        let scheduler = InProcessScheduler::new("test").with_clock(clock.clone());
+        let kind = JobKindId::new("test");
+        // 2 attempts, 5s delay between them — large enough that a
+        // real-time equivalent of this test would need a genuine sleep.
+        scheduler
+            .register_retry_policy(
+                kind.clone(),
+                RetryPolicy::Fixed {
+                    attempts: 2,
+                    delay_ms: 5_000,
+                },
+            )
+            .await;
+
+        let id = mk_id("test", "clock-fail");
+        let mut dag = Dag::new();
+        dag.ensure_node(id.clone());
+        scheduler
+            .register_job(Arc::new(FailJob { id: id.clone() }))
+            .await;
+
+        // Tick 1: Pending → Ready → Running → Failed → Retrying{until_ms}.
+        let start = std::time::Instant::now();
+        scheduler.tick(&mut dag).await.unwrap();
+        assert!(
+            matches!(
+                scheduler.phase_of(&id).await,
+                JobPhase::Retrying { .. }
+            ),
+            "expected Retrying after first failure, got {:?}",
+            scheduler.phase_of(&id).await
+        );
+
+        // Tick again WITHOUT advancing the clock — the 5s backoff has not
+        // elapsed (per the FixedClock, which never moves on its own), so
+        // the job stays put.
+        scheduler.tick(&mut dag).await.unwrap();
+        assert!(matches!(
+            scheduler.phase_of(&id).await,
+            JobPhase::Retrying { .. }
+        ));
+
+        // Advance the fixed clock PAST the backoff window — no real time
+        // passes; this is a synchronous state mutation.
+        clock.advance(Duration::from_millis(6_000));
+
+        // The backoff has "elapsed" per the clock; the job re-evaluates
+        // gates, runs its second (and final, attempts=2) attempt, which
+        // also fails → Deadlettered. A few ticks cover the multi-step FSM
+        // walk (Retrying→Pending→Ready→Running→Failed→Deadlettered); none
+        // of them sleep.
+        for _ in 0..4 {
+            scheduler.tick(&mut dag).await.unwrap();
+            if scheduler.phase_of(&id).await == JobPhase::Deadlettered {
+                break;
+            }
+        }
+        assert_eq!(scheduler.phase_of(&id).await, JobPhase::Deadlettered);
+
+        // The whole test — including "waiting out" a 5s backoff twice
+        // over — ran in well under a second of real wall-clock time.
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "test took {:?} — the FixedClock should have made the 5s backoff instant",
+            start.elapsed()
+        );
+    }
+
+    /// Load-bearing proof for `SchedulerStore`: a scheduler's FSM state
+    /// round-trips through a `JsonFileSchedulerStore` across a simulated
+    /// restart. A fresh `InProcessScheduler` instance — standing in for a
+    /// fresh process — re-registers the same Job, loads the persisted
+    /// snapshot, and resumes exactly where the first instance left off
+    /// (mid-backoff), rather than reverting to `Pending`.
+    #[tokio::test]
+    async fn scheduler_state_round_trips_through_the_store_across_a_simulated_restart() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store_path = dir.path().join("scheduler-state.json");
+
+        let id = mk_id("test", "restart-me");
+        let kind = id.kind.clone();
+
+        // ── "Process 1": fail once, land in Retrying, persist. ─────
+        let saved_snapshot = {
+            let scheduler = InProcessScheduler::new("test");
+            scheduler
+                .register_retry_policy(
+                    kind.clone(),
+                    RetryPolicy::Fixed {
+                        attempts: 5,
+                        delay_ms: 60_000,
+                    },
+                )
+                .await;
+            let mut dag = Dag::new();
+            dag.ensure_node(id.clone());
+            scheduler
+                .register_job(Arc::new(FailJob { id: id.clone() }))
+                .await;
+
+            scheduler.tick(&mut dag).await.unwrap();
+            let phase = scheduler.phase_of(&id).await;
+            assert!(
+                matches!(phase, JobPhase::Retrying { .. }),
+                "expected Retrying, got {phase:?}"
+            );
+
+            let snapshot = scheduler.snapshot_state().await;
+            let store = JsonFileSchedulerStore::new(store_path.clone());
+            store.save(&snapshot).unwrap();
+            snapshot
+            // `scheduler` drops here — simulates the process exiting.
+        };
+        assert_eq!(saved_snapshot.len(), 1);
+
+        // ── "Process 2": a BRAND NEW scheduler, re-registers the same
+        // Job (the executable graph), loads the store, and resumes. ────
+        let store = JsonFileSchedulerStore::new(store_path);
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.len(), 1, "the snapshot must survive the reload");
+
+        let resumed = InProcessScheduler::new("test");
+        resumed
+            .register_job(Arc::new(FailJob { id: id.clone() }))
+            .await;
+        resumed.restore_state(loaded).await;
+
+        // The new instance picked up mid-flight — still Retrying, NOT
+        // reset to Pending the way an unrestored fresh scheduler would be.
+        assert!(
+            matches!(resumed.phase_of(&id).await, JobPhase::Retrying { .. }),
+            "restored scheduler should resume Retrying, not restart at Pending"
+        );
+
+        // And it carried the attempt count forward too, so the retry
+        // budget doesn't silently reset across the "restart".
+        let snapshot_after_restore = resumed.snapshot_state().await;
+        let restored_job = snapshot_after_restore
+            .jobs
+            .iter()
+            .find(|j| j.id == id)
+            .expect("restored job present");
+        assert_eq!(restored_job.attempts, 1);
     }
 }
