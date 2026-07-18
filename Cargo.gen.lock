@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cargo_lock_sha256": "739ec588019302305b3a037e63e3df75907df05efcdf09971dc381675d6ad9dd",
+  "cargo_lock_sha256": "fdc1c57638f46dc0c7c56cb5be2a8ca03f9349b5198adac5225db6990d6319bc",
   "target_resolves": {
     "base": {
       "anyhow-1.0.102": {
@@ -1325,6 +1325,28 @@
             "features": [
               "serde"
             ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.228",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.150",
+            "kind": "normal",
+            "features": [],
             "uses_default_features": true,
             "optional": false,
             "target": null,
