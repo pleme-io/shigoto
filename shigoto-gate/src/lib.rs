@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroUsize;
+
 use shigoto_dag::Dag;
 use shigoto_types::{GateAggregate, JobId, JobPhase, SkipReason, Snapshot};
 
@@ -31,10 +33,27 @@ pub struct GateContext<'a> {
     pub dag: &'a Dag,
 }
 
+/// One gate's verdict.
+///
+/// **The derived-verdict law** (`theory/UNREPRESENTABILITY.md` §II.4):
+/// a gate that examined nothing must not wear the badge of a gate that
+/// examined many and found them all good. `Vacuous` is therefore a
+/// distinct arm rather than a silent branch of `Pass`.
+///
+/// `#[non_exhaustive]` is deliberate and load-bearing: it forces every
+/// downstream `match` to carry a wildcard, so the *next* arm this enum
+/// grows — notably promoting `Pass` to carry its own subject-set
+/// witness — is a non-breaking change instead of a fleet migration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GateOutcome {
-    /// This gate is satisfied; the job may advance past it.
+    /// This gate examined a **non-empty** subject set and every
+    /// subject satisfied it; the job may advance past this gate.
     Pass,
+    /// This gate ran and its subject set was **empty**, so it makes no
+    /// claim about anything. Non-blocking — a DAG root with no
+    /// predecessors must still run — but never counted as a pass.
+    Vacuous,
     /// This gate is not yet satisfied but expects to be later. The
     /// scheduler re-evaluates on each tick.
     Wait,
@@ -45,24 +64,48 @@ pub enum GateOutcome {
 
 /// Reduce a cohort of Gate outcomes to one `GateAggregate` that the
 /// FSM `advance()` consumes. Worst-outcome wins: any Skip → Skipped;
-/// no Skip but any Wait → SomeWaiting; otherwise → AllPassed. The
-/// first Skip's reason is preserved.
+/// no Skip but any Wait → SomeWaiting. The first Skip's reason is
+/// preserved.
+///
+/// **This is the single classifier** (§II.4 clause 1): the one place a
+/// `GateAggregate` is chosen. No other function constructs one, so a
+/// verdict and the subject set it claims about share one origin and
+/// cannot drift apart.
+///
+/// The `AllPassed` / `Vacuous` split is derived, never asserted
+/// (§II.4 clause 2): the reduction counts the gates that actually
+/// returned `Pass`, and only a `NonZeroUsize` can name `AllPassed`.
+/// A cohort of size 0 — or one in which every gate was itself
+/// `Vacuous` — therefore has **no way to report a pass**. It reports
+/// `Vacuous`, which drives the identical FSM transition (see
+/// `shigoto_types::advance`) while saying something different and
+/// true.
+///
+/// The `match` below is exhaustive over `GateOutcome` with no `_` arm.
+/// `GateOutcome` is `#[non_exhaustive]` only for *downstream* crates;
+/// inside this crate the arm set stays closed, so a future arm cannot
+/// be silently rounded up into the pass branch (§II.3 subclass D).
 #[must_use]
 pub fn reduce(outcomes: &[GateOutcome]) -> GateAggregate {
-    // Cohorts of size 0 trivially pass — a job with no gates can run
-    // immediately. The scheduler's default behavior matches.
     let mut any_wait = false;
+    let mut passed: usize = 0;
     for o in outcomes {
         match o {
             GateOutcome::Skip(reason) => return GateAggregate::Skipped(reason.clone()),
             GateOutcome::Wait => any_wait = true,
-            GateOutcome::Pass => {}
+            GateOutcome::Pass => passed += 1,
+            // Examined nothing; contributes no evidence either way.
+            GateOutcome::Vacuous => {}
         }
     }
     if any_wait {
-        GateAggregate::SomeWaiting
-    } else {
-        GateAggregate::AllPassed
+        return GateAggregate::SomeWaiting;
+    }
+    match NonZeroUsize::new(passed) {
+        Some(gates) => GateAggregate::AllPassed { gates },
+        // Zero gates made a claim. There is no `AllPassed` to return
+        // here — the type refuses to express one.
+        None => GateAggregate::Vacuous,
     }
 }
 
@@ -73,11 +116,21 @@ pub fn reduce(outcomes: &[GateOutcome]) -> GateAggregate {
 /// scheduler implicitly applies this gate to enforce DAG edge
 /// semantics; consumers don't normally register it explicitly.
 ///
-/// Pass iff every predecessor is terminal. Wait if any predecessor
-/// is non-terminal. (We never Skip from this gate — a Deadlettered
+/// Pass iff a **non-empty** predecessor set is entirely terminal.
+/// Wait if any predecessor is non-terminal. `Vacuous` if there are no
+/// predecessors at all. (We never Skip from this gate — a Deadlettered
 /// ancestor releases its descendants per §VII.4's cascading-skip
 /// rule, but the descendant's own gate cohort decides whether to
 /// run.)
+///
+/// This gate is a **universally quantified claim** — "every upstream
+/// is terminal" — so it is exactly the shape §II.4 governs. A DAG
+/// *root* has zero predecessors; before the `Vacuous` arm existed it
+/// returned the same `Pass` as a leaf that had genuinely verified two
+/// terminal upstreams, and every root job in every DAG in the fleet
+/// reported "all upstreams terminal: PASSED" having examined none.
+/// Roots still run (`Vacuous` drives the identical transition) — they
+/// just no longer claim a verification they never performed.
 pub struct AllUpstreamsTerminal;
 
 impl Gate for AllUpstreamsTerminal {
@@ -86,6 +139,7 @@ impl Gate for AllUpstreamsTerminal {
     }
 
     fn evaluate(&self, ctx: &GateContext) -> GateOutcome {
+        let mut examined: usize = 0;
         for pred in ctx.dag.predecessors(ctx.job_id) {
             let phase = ctx
                 .snapshot
@@ -96,8 +150,15 @@ impl Gate for AllUpstreamsTerminal {
             if !is_terminal(&phase) {
                 return GateOutcome::Wait;
             }
+            examined += 1;
         }
-        GateOutcome::Pass
+        // Derived from the subject set, never asserted: the verdict is
+        // a function of how many predecessors were actually inspected.
+        if examined == 0 {
+            GateOutcome::Vacuous
+        } else {
+            GateOutcome::Pass
+        }
     }
 }
 
@@ -157,18 +218,132 @@ mod tests {
         }
     }
 
-    // ── reduce ────────────────────────────────────────────────
+    fn nz(n: usize) -> NonZeroUsize {
+        NonZeroUsize::new(n).expect("test witness must be non-zero")
+    }
+
+    // ── REGRESSIONS for the derived-verdict law (§II.4) ───────────
+    //
+    // These three are the INVERTED before-fix receipt. Each one PASSED
+    // against the unfixed code at c75c2af, asserting the defective
+    // behaviour (`reduce(&[]) == AllPassed`, `AllUpstreamsTerminal`
+    // returning `Pass` over zero predecessors, and the two being
+    // indistinguishable). They now assert the opposite and FAIL if
+    // anyone reintroduces the old behaviour.
 
     #[test]
-    fn reduce_empty_is_all_passed() {
-        assert_eq!(reduce(&[]), GateAggregate::AllPassed);
+    fn reduce_empty_cohort_is_vacuous_never_all_passed() {
+        // Was: `assert_eq!(reduce(&[]), GateAggregate::AllPassed)`.
+        assert_eq!(reduce(&[]), GateAggregate::Vacuous);
+        assert!(
+            !matches!(reduce(&[]), GateAggregate::AllPassed { .. }),
+            "a cohort that examined zero gates must never claim a pass"
+        );
     }
 
     #[test]
-    fn reduce_all_pass_is_all_passed() {
+    fn all_upstreams_terminal_is_vacuous_over_zero_predecessors() {
+        // Was: `assert_eq!(..., GateOutcome::Pass)`.
+        let dag = Dag::new();
+        let snapshot = Snapshot {
+            phases: HashMap::new(),
+        };
+        let root = n("root");
+        let ctx = GateContext {
+            job_id: &root,
+            snapshot: &snapshot,
+            dag: &dag,
+        };
+        assert_eq!(AllUpstreamsTerminal.evaluate(&ctx), GateOutcome::Vacuous);
+    }
+
+    #[test]
+    fn zero_subject_verdict_is_distinguishable_from_a_real_pass() {
+        // A root job: ZERO predecessors examined.
+        let empty_dag = Dag::new();
+        let empty_snapshot = Snapshot {
+            phases: HashMap::new(),
+        };
+        let root = n("root");
+        let root_outcome = AllUpstreamsTerminal.evaluate(&GateContext {
+            job_id: &root,
+            snapshot: &empty_snapshot,
+            dag: &empty_dag,
+        });
+
+        // A leaf job: TWO predecessors examined, both terminal-good.
+        let mut dag = Dag::new();
+        dag.add_edge(n("a"), n("leaf"));
+        dag.add_edge(n("b"), n("leaf"));
+        let mut phases = HashMap::new();
+        phases.insert(n("a"), JobPhase::Succeeded);
+        phases.insert(n("b"), JobPhase::Succeeded);
+        let snapshot = Snapshot { phases };
+        let leaf = n("leaf");
+        let leaf_outcome = AllUpstreamsTerminal.evaluate(&GateContext {
+            job_id: &leaf,
+            snapshot: &snapshot,
+            dag: &dag,
+        });
+
+        // THE FIX: examined-nothing and examined-two-and-verified-both
+        // are now different values, and reduce to different aggregates.
+        assert_ne!(root_outcome, leaf_outcome);
+        assert_eq!(root_outcome, GateOutcome::Vacuous);
+        assert_eq!(leaf_outcome, GateOutcome::Pass);
+        assert_ne!(reduce(&[root_outcome]), reduce(&[leaf_outcome]));
+    }
+
+    // ── reduce ────────────────────────────────────────────────
+
+    #[test]
+    fn reduce_all_pass_carries_the_subject_set_witness() {
         assert_eq!(
             reduce(&[GateOutcome::Pass, GateOutcome::Pass]),
-            GateAggregate::AllPassed
+            GateAggregate::AllPassed { gates: nz(2) }
+        );
+        // The witness is derived from the cohort, not asserted: a
+        // three-gate cohort and a two-gate cohort are different values.
+        assert_ne!(
+            reduce(&[GateOutcome::Pass, GateOutcome::Pass, GateOutcome::Pass]),
+            reduce(&[GateOutcome::Pass, GateOutcome::Pass])
+        );
+    }
+
+    #[test]
+    fn reduce_all_vacuous_is_vacuous_not_all_passed() {
+        // Every gate examined nothing ⇒ the cohort claims nothing.
+        assert_eq!(
+            reduce(&[GateOutcome::Vacuous, GateOutcome::Vacuous]),
+            GateAggregate::Vacuous
+        );
+    }
+
+    #[test]
+    fn reduce_counts_only_gates_that_actually_claimed() {
+        // One real Pass beside two Vacuous gates ⇒ witness of 1, not 3.
+        assert_eq!(
+            reduce(&[
+                GateOutcome::Vacuous,
+                GateOutcome::Pass,
+                GateOutcome::Vacuous
+            ]),
+            GateAggregate::AllPassed { gates: nz(1) }
+        );
+    }
+
+    #[test]
+    fn reduce_vacuous_never_masks_a_wait_or_a_skip() {
+        assert_eq!(
+            reduce(&[GateOutcome::Vacuous, GateOutcome::Wait]),
+            GateAggregate::SomeWaiting
+        );
+        assert_eq!(
+            reduce(&[
+                GateOutcome::Vacuous,
+                GateOutcome::Skip(SkipReason::GateRejected)
+            ]),
+            GateAggregate::Skipped(SkipReason::GateRejected)
         );
     }
 
@@ -206,8 +381,18 @@ mod tests {
 
     // ── AllUpstreamsTerminal ──────────────────────────────────
 
+    /// SCHEDULING BEHAVIOUR IS PRESERVED — the load-bearing test.
+    ///
+    /// §II.4 does not say "empty fails", and for a scheduler it must
+    /// not: a DAG node with no predecessors has to run. The fix
+    /// changes what the verdict SAYS, never what the scheduler DOES.
+    /// This asserts both halves at once — a root reduces to `Vacuous`
+    /// (a different value) and still advances `Pending → Ready` (the
+    /// same transition a real pass produces).
     #[test]
-    fn all_upstreams_terminal_passes_for_root_with_no_predecessors() {
+    fn a_root_with_no_predecessors_still_becomes_ready() {
+        use shigoto_types::{Signal, advance};
+
         let dag = Dag::new();
         let snapshot = Snapshot {
             phases: HashMap::new(),
@@ -218,7 +403,33 @@ mod tests {
             snapshot: &snapshot,
             dag: &dag,
         };
-        assert_eq!(AllUpstreamsTerminal.evaluate(&ctx), GateOutcome::Pass);
+
+        let aggregate = reduce(&[AllUpstreamsTerminal.evaluate(&ctx)]);
+        assert_eq!(aggregate, GateAggregate::Vacuous);
+
+        // The scheduler proceeds, exactly as it did before the fix.
+        assert_eq!(
+            advance(JobPhase::Pending, Signal::EvaluateGates(aggregate)),
+            Ok(JobPhase::Ready),
+            "a DAG root must still run — Vacuous is non-blocking"
+        );
+
+        // And it proceeds from every other gate-evaluating phase, so
+        // no cell fell through to `IllegalTransition`.
+        for from in [JobPhase::Gated, JobPhase::Ready] {
+            assert_eq!(
+                advance(from.clone(), Signal::EvaluateGates(GateAggregate::Vacuous)),
+                Ok(JobPhase::Ready),
+                "Vacuous must not wedge {from:?}"
+            );
+        }
+        assert_eq!(
+            advance(
+                JobPhase::Retrying { until_ms: 0 },
+                Signal::EvaluateGates(GateAggregate::Vacuous)
+            ),
+            Ok(JobPhase::Ready)
+        );
     }
 
     #[test]

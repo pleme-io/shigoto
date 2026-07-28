@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -195,17 +196,43 @@ pub enum Signal {
 }
 
 /// Aggregate gate outcome — what the cohort of gates collectively said.
-/// Per §III.9 individual gates return Pass / Wait / Skip; the
+/// Per §III.9 individual gates return Pass / Vacuous / Wait / Skip; the
 /// aggregate is the worst outcome (Skip > Wait > Pass) per a typed
 /// reducer in shigoto-gate. We carry the rolled-up result here so the
 /// FSM stays language-agnostic about how the rollup is computed.
 ///
+/// **The derived-verdict law** (`theory/UNREPRESENTABILITY.md` §II.4):
+/// a verdict is derived from the subject set it claims about and
+/// carries the witness of that derivation. Concretely here:
+///
+/// * `AllPassed` cannot be *named* without a `NonZeroUsize` — so
+///   "every gate passed" over an empty cohort has no representation.
+/// * `Vacuous` is a **distinct arm**, never a pass. Emptiness is
+///   sayable, so its meaning is decided once, visibly (below), instead
+///   of silently inheriting the pass arm's badge.
+///
+/// §II.4 explicitly does *not* say "empty fails". For a scheduler the
+/// opposite is required: a DAG root has no predecessors and **must
+/// still run**. So `Vacuous` drives the same phase transitions as
+/// `AllPassed` (see `advance`) — it changes what the outcome *says*,
+/// never what the scheduler *does*.
+///
 /// `kind()` + variant predicates auto-generated via gen-platform.
 #[derive(Debug, Clone, PartialEq, Eq, gen_platform::Discriminant, gen_platform::IsVariant)]
 #[discriminant(method = "kind", case = "kebab")]
+#[non_exhaustive]
 pub enum GateAggregate {
-    /// Every gate returned Pass — job advances to Ready.
-    AllPassed,
+    /// Every gate in a **non-empty** cohort returned Pass — job
+    /// advances to Ready. `gates` is the subject-set witness: how many
+    /// gates were actually examined to reach this verdict. It is a
+    /// projection of the reduction, never a field a caller chooses.
+    AllPassed { gates: NonZeroUsize },
+    /// **No gate made a claim** — the cohort was empty, or every gate
+    /// in it was itself `Vacuous`. Job advances to Ready exactly as
+    /// `AllPassed` does; the distinction is that this verdict asserts
+    /// nothing about any subject, and downstream (audit events,
+    /// transition reasons, receipts) can finally tell the two apart.
+    Vacuous,
     /// At least one gate returned Wait — job stays Gated.
     SomeWaiting,
     /// At least one gate returned Skip — job advances to Skipped with
@@ -261,14 +288,20 @@ pub fn advance(from: JobPhase, signal: Signal) -> Result<JobPhase, IllegalTransi
     use Signal::*;
     let new = match (&from, &signal) {
         // ── Pending dispatches via gate evaluation ─────────────
-        (JobPhase::Pending, EvaluateGates(GateAggregate::AllPassed)) => JobPhase::Ready,
+        // `Vacuous` shares every `AllPassed` cell below: a job whose
+        // cohort claimed nothing (a DAG root) must still run. The two
+        // are distinguishable as VALUES and identical as TRANSITIONS —
+        // that is the whole point of the split (§II.4).
+        (JobPhase::Pending, EvaluateGates(GateAggregate::AllPassed { .. }))
+        | (JobPhase::Pending, EvaluateGates(GateAggregate::Vacuous)) => JobPhase::Ready,
         (JobPhase::Pending, EvaluateGates(GateAggregate::SomeWaiting)) => JobPhase::Gated,
         (JobPhase::Pending, EvaluateGates(GateAggregate::Skipped(r))) => {
             JobPhase::Skipped(r.clone())
         }
 
         // ── Gated re-evaluates each tick ───────────────────────
-        (JobPhase::Gated, EvaluateGates(GateAggregate::AllPassed)) => JobPhase::Ready,
+        (JobPhase::Gated, EvaluateGates(GateAggregate::AllPassed { .. }))
+        | (JobPhase::Gated, EvaluateGates(GateAggregate::Vacuous)) => JobPhase::Ready,
         (JobPhase::Gated, EvaluateGates(GateAggregate::SomeWaiting)) => JobPhase::Gated,
         (JobPhase::Gated, EvaluateGates(GateAggregate::Skipped(r))) => JobPhase::Skipped(r.clone()),
 
@@ -277,7 +310,8 @@ pub fn advance(from: JobPhase, signal: Signal) -> Result<JobPhase, IllegalTransi
         // Re-evaluating gates from Ready is allowed (a config change
         // may have invalidated a previously-Pass gate); same dispatch
         // as Gated.
-        (JobPhase::Ready, EvaluateGates(GateAggregate::AllPassed)) => JobPhase::Ready,
+        (JobPhase::Ready, EvaluateGates(GateAggregate::AllPassed { .. }))
+        | (JobPhase::Ready, EvaluateGates(GateAggregate::Vacuous)) => JobPhase::Ready,
         (JobPhase::Ready, EvaluateGates(GateAggregate::SomeWaiting)) => JobPhase::Gated,
         (JobPhase::Ready, EvaluateGates(GateAggregate::Skipped(r))) => JobPhase::Skipped(r.clone()),
 
@@ -299,7 +333,8 @@ pub fn advance(from: JobPhase, signal: Signal) -> Result<JobPhase, IllegalTransi
         (JobPhase::Retrying { .. }, BackoffElapsed) => JobPhase::Pending,
         // Gate re-eval from Retrying is allowed if a precondition
         // changes (rare; treated like Pending re-eval).
-        (JobPhase::Retrying { .. }, EvaluateGates(GateAggregate::AllPassed)) => JobPhase::Ready,
+        (JobPhase::Retrying { .. }, EvaluateGates(GateAggregate::AllPassed { .. }))
+        | (JobPhase::Retrying { .. }, EvaluateGates(GateAggregate::Vacuous)) => JobPhase::Ready,
         (JobPhase::Retrying { .. }, EvaluateGates(GateAggregate::SomeWaiting)) => JobPhase::Gated,
         (JobPhase::Retrying { .. }, EvaluateGates(GateAggregate::Skipped(r))) => {
             JobPhase::Skipped(r.clone())
@@ -629,7 +664,15 @@ mod fsm_tests {
     use super::*;
 
     fn pass() -> Signal {
-        Signal::EvaluateGates(GateAggregate::AllPassed)
+        Signal::EvaluateGates(GateAggregate::AllPassed {
+            gates: NonZeroUsize::new(1).expect("1 is non-zero"),
+        })
+    }
+    /// A cohort that claimed nothing. Drives the same transitions as
+    /// `pass()` by design (§II.4: emptiness is *sayable*, not fatal) —
+    /// the FSM cells below assert that equivalence explicitly.
+    fn vacuous() -> Signal {
+        Signal::EvaluateGates(GateAggregate::Vacuous)
     }
     fn wait() -> Signal {
         Signal::EvaluateGates(GateAggregate::SomeWaiting)
@@ -639,6 +682,36 @@ mod fsm_tests {
     }
 
     // ── Pending dispatches ─────────────────────────────────────
+
+    /// `Vacuous` is a distinct VALUE with an identical TRANSITION.
+    ///
+    /// The derived-verdict law (§II.4) splits "examined nothing" out of
+    /// the pass arm so downstream can tell them apart. It must not
+    /// change scheduling: a DAG root has an empty gate cohort and has
+    /// to run. Every phase that dispatches on gate evaluation is
+    /// asserted here, so a missing cell cannot silently fall through
+    /// to `IllegalTransition` and wedge every root job in the fleet.
+    #[test]
+    fn vacuous_drives_the_same_transitions_as_all_passed() {
+        for from in [
+            JobPhase::Pending,
+            JobPhase::Gated,
+            JobPhase::Ready,
+            JobPhase::Retrying { until_ms: 0 },
+        ] {
+            assert_eq!(
+                advance(from.clone(), vacuous()),
+                advance(from.clone(), pass()),
+                "Vacuous must transition identically to AllPassed from {from:?}"
+            );
+            assert_eq!(advance(from.clone(), vacuous()).unwrap(), JobPhase::Ready);
+        }
+    }
+
+    #[test]
+    fn vacuous_and_all_passed_are_different_values() {
+        assert_ne!(vacuous(), pass());
+    }
 
     #[test]
     fn pending_with_all_pass_advances_to_ready() {
