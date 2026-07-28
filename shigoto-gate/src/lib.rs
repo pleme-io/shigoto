@@ -85,6 +85,44 @@ pub enum GateOutcome {
 /// `GateOutcome` is `#[non_exhaustive]` only for *downstream* crates;
 /// inside this crate the arm set stays closed, so a future arm cannot
 /// be silently rounded up into the pass branch (§II.3 subclass D).
+///
+/// # `pending-unrep: shigoto-gate-witness-as-value` — OPEN, and why
+///
+/// §II.4 requires the witness be a **value, not a count**: "a `usize` is
+/// assertable; even a `NonZeroUsize` fixes zero while carrying no
+/// provenance." `AllPassed { gates: NonZeroUsize }` ships the count. The
+/// intended close is `GateAggregate` → `gen_verdict::Verdict<GateRef,
+/// SkipReason>`, with this function delegating to `Verdict::judge` and
+/// `Subjects<GateRef>` supplying the value-witness.
+///
+/// **Blocked, measured 2026-07-28 — not deferred by preference.** The
+/// `gen-verdict` crate exists only in an *unpushed* local commit of
+/// `pleme-io/gen` (`05675d8`; `origin/main` is `0f4db0c`). Resolution fails
+/// outright:
+///
+/// ```text
+/// error: no matching package named `gen-verdict` found
+/// location searched: Git repository https://github.com/pleme-io/gen
+/// ```
+///
+/// So the dep is free in *weight* — shigoto-types already takes
+/// `gen-platform`/`gen-types` from that same repo, adding no new tree — but
+/// it is not yet **available**. Taking it now would break `engate`, `seibi`
+/// and `tend`, which consume shigoto by git unpinned to `main`, on their
+/// next build. The unblock is upstream and one step: push `gen`.
+///
+/// Two further facts the next attempt should not re-derive:
+///
+/// * **Do not hand-roll a local `NonEmpty`.** gen-verdict is deliberately
+///   3-deps-and-no-more so every gate in the fleet can afford it, and it is
+///   the fleet's *first* `NonEmpty`. A second one here would be the
+///   duplication the Prime Directive forbids, not a workaround.
+/// * **`reduce` has no gate identity to witness with.** It takes
+///   `&[GateOutcome]` — outcomes only — so `Subjects<GateRef>` also requires
+///   a signature change carrying each gate's ref. That change *is* breaking:
+///   `camelot-fabric-startup` calls `reduce(&[outcome])` positionally
+///   (`src/startup/interpreter.rs:59`). Scope it as such; do not ship it
+///   silently alongside the dep flip.
 #[must_use]
 pub fn reduce(outcomes: &[GateOutcome]) -> GateAggregate {
     let mut any_wait = false;

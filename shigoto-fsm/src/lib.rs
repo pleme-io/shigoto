@@ -9,9 +9,9 @@
 //! lifecycles, breathe's resource-admission FSM, …) — the same ~30 lines of graph
 //! walk, copied. This crate makes it a primitive: implement [`ConvergentFsm`]
 //! (four cheap accessors) and call [`assert_convergent_fsm`] in one `#[test]` to
-//! get the whole forcing-function — enumeration, closed-graph, terminal-soundness,
-//! no-traps, and BFS reachability — mechanically. A future edit that introduces a
-//! never-exit state fails the test, not production.
+//! get the whole forcing-function — non-empty state space, closed-graph,
+//! terminal-soundness, no-traps, and BFS reachability — mechanically. A future
+//! edit that introduces a never-exit state fails the test, not production.
 //!
 //! Pure `std`, zero dependencies — the lightest consumer pays nothing.
 //!
@@ -39,9 +39,18 @@ use std::hash::Hash;
 /// terminal is a successful resting state (e.g. `Ready`/`Settled`/`Released`);
 /// a terminal that is not good is a failure sink the proof will reject as a trap.
 pub trait ConvergentFsm: Copy + Eq + Hash + std::fmt::Debug + 'static {
-    /// Every state of the FSM, exactly once. The enumeration the proofs range
-    /// over — an omission here is itself a bug the [`enumeration_is_complete`]
-    /// style check (left to the consumer's `all()` derivation) guards.
+    /// Every state of the FSM, exactly once. The enumeration every proof in
+    /// this crate ranges over.
+    ///
+    /// **This slice is the harness's entire subject set, so its two failure
+    /// modes are not symmetric.** Emptiness is caught here
+    /// ([`check_state_space_non_empty`]); *incompleteness* is not and cannot
+    /// be — no generic Rust function can enumerate a foreign enum's variants,
+    /// so an `all()` that returns three of five states yields proofs that are
+    /// silently scoped to those three. Derive this slice mechanically (a
+    /// `strum::EnumIter` / `#[derive(AllVariants)]`-backed `all()` discharges
+    /// completeness by construction); a hand-maintained literal is a table
+    /// that drifts the first time a variant is added.
     fn all() -> &'static [Self];
 
     /// The states reachable from `self` in one legal transition. Empty ⇒ `self`
@@ -85,8 +94,18 @@ pub struct FsmDefect {
     pub message: String,
 }
 
+/// `#[non_exhaustive]` is deliberate and load-bearing: it forces every
+/// downstream `match` to carry a wildcard, so the *next* defect kind this
+/// harness learns to detect is a non-breaking change instead of a fleet
+/// migration. It is free today — no crate outside shigoto references
+/// `DefectKind` at all (consumers call [`assert_convergent_fsm`], which
+/// returns `Result<(), String>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DefectKind {
+    /// `all()` enumerated **zero states**, so every proof below ranges over
+    /// an empty set and reports success having examined nothing.
+    EmptyStateSpace,
     /// A `successors()` edge points at a state not in `all()`.
     DanglingEdge,
     /// `is_terminal()` disagrees with `successors().is_empty()`.
@@ -105,10 +124,56 @@ impl std::fmt::Display for FsmDefect {
     }
 }
 
+/// The state space is **non-empty** — the precondition every proof below
+/// silently assumed.
+///
+/// **The vacuous-guard defect** (`theory/UNREPRESENTABILITY.md` §II.3
+/// subclass A — "a gate never observed to fail may be checking nothing").
+/// Every `check_*` in this crate is a `for &s in F::all()` loop that
+/// accumulates defects. Over an empty `all()` each loop runs zero times,
+/// returns zero defects, and [`assert_convergent_fsm`] reports `Ok(())` — a
+/// green *convergence proof* that examined no states, ranged over no edges
+/// and proved nothing. That is the most extreme round-up available, because
+/// the evidence looks like the strongest kind: a green CI gate.
+///
+/// It is not hypothetical. `assert_convergent_fsm` is consumed as a
+/// CI-forcing-function by three repos outside shigoto
+/// (`camelot-fabric-startup`, `breathe-admission`, `breathe-lifecycle`), and
+/// each of those green tests rested on this unchecked precondition.
+///
+/// # Tier-honest — this closes emptiness, NOT incompleteness
+///
+/// A `NonEmpty` state space is a *necessary* condition, not a sufficient
+/// one. An `all()` that returns three of five variants still enumerates a
+/// non-empty set, and this harness **cannot** detect the two it omitted —
+/// nothing in Rust lets a generic function enumerate a foreign enum's
+/// variants. Completeness remains the consumer's obligation (a
+/// `strum::EnumIter`/`#[derive(AllVariants)]`-derived `all()` discharges it
+/// by construction; a hand-written slice does not). The crate-level doc
+/// previously listed "enumeration" among the properties the harness proves;
+/// it proves non-emptiness, and now says so.
+pub fn check_state_space_non_empty<F: ConvergentFsm>() -> Vec<FsmDefect> {
+    if F::all().is_empty() {
+        vec![FsmDefect {
+            kind: DefectKind::EmptyStateSpace,
+            message: "all() enumerated zero states — every convergence proof \
+                      below would range over an empty set and report success \
+                      having examined nothing"
+                .to_string(),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Every `successors()` edge references a member of `all()` — the graph is closed.
+///
+/// Reports [`DefectKind::EmptyStateSpace`] rather than a vacuous pass when
+/// `all()` is empty, so calling this check directly is guarded exactly as
+/// calling it through [`assert_convergent_fsm`] is.
 pub fn check_graph_closed<F: ConvergentFsm>() -> Vec<FsmDefect> {
     let universe: HashSet<F> = F::all().iter().copied().collect();
-    let mut defects = Vec::new();
+    let mut defects = check_state_space_non_empty::<F>();
     for &s in F::all() {
         for succ in s.successors() {
             if !universe.contains(&succ) {
@@ -125,7 +190,7 @@ pub fn check_graph_closed<F: ConvergentFsm>() -> Vec<FsmDefect> {
 /// `is_terminal()` agrees with `successors().is_empty()`, and every terminal is
 /// a good terminal (no failure sink may be a permanent resting state).
 pub fn check_terminals_sound<F: ConvergentFsm>() -> Vec<FsmDefect> {
-    let mut defects = Vec::new();
+    let mut defects = check_state_space_non_empty::<F>();
     for &s in F::all() {
         let no_succ = s.successors().is_empty();
         if s.is_terminal() != no_succ {
@@ -149,7 +214,7 @@ pub fn check_terminals_sound<F: ConvergentFsm>() -> Vec<FsmDefect> {
 
 /// Every non-terminal has at least one successor — no dead-end traps.
 pub fn check_no_traps<F: ConvergentFsm>() -> Vec<FsmDefect> {
-    let mut defects = Vec::new();
+    let mut defects = check_state_space_non_empty::<F>();
     for &s in F::all() {
         if !s.is_terminal() && s.successors().is_empty() {
             defects.push(FsmDefect {
@@ -167,7 +232,7 @@ pub fn check_no_traps<F: ConvergentFsm>() -> Vec<FsmDefect> {
 /// reconcile FSM it is a re-entrant good state like `Ready` (see
 /// [`ConvergentFsm::is_good_resting_state`]).
 pub fn check_all_converge<F: ConvergentFsm>() -> Vec<FsmDefect> {
-    let mut defects = Vec::new();
+    let mut defects = check_state_space_non_empty::<F>();
     for &start in F::all() {
         if !reaches_good_terminal(start) {
             defects.push(FsmDefect {
@@ -206,11 +271,18 @@ pub fn reaches_good_terminal<F: ConvergentFsm>(start: F) -> bool {
 /// #[test] fn lifecycle_is_convergent() { shigoto_fsm::assert_convergent_fsm::<Phase>().unwrap(); }
 /// ```
 pub fn assert_convergent_fsm<F: ConvergentFsm>() -> Result<(), String> {
-    let mut defects = Vec::new();
-    defects.extend(check_graph_closed::<F>());
-    defects.extend(check_terminals_sound::<F>());
-    defects.extend(check_no_traps::<F>());
-    defects.extend(check_all_converge::<F>());
+    // Checked FIRST and short-circuiting, for two reasons. It is the
+    // precondition the other four assume, so running them over an empty
+    // universe would add four more zero-defect vacuous passes to the report
+    // rather than information; and short-circuiting keeps the emptiness
+    // defect reported exactly once instead of once per check.
+    let mut defects = check_state_space_non_empty::<F>();
+    if defects.is_empty() {
+        defects.extend(check_graph_closed::<F>());
+        defects.extend(check_terminals_sound::<F>());
+        defects.extend(check_no_traps::<F>());
+        defects.extend(check_all_converge::<F>());
+    }
     if defects.is_empty() {
         return Ok(());
     }
@@ -254,6 +326,94 @@ mod tests {
         fn is_good_terminal(&self) -> bool {
             self.is_terminal()
         }
+    }
+
+    // ── REGRESSION for the vacuous-guard defect (§II.3 subclass A) ────────
+    //
+    // This is the INVERTED before-fix receipt. Against the unfixed code at
+    // 0c270cd the assertion below was `is_ok()` and it PASSED: the harness
+    // reported a green convergence proof over ZERO states, and all four
+    // `check_*` returned zero defects. It now asserts the opposite and fails
+    // if anyone reintroduces the vacuous pass.
+
+    /// An FSM with no states at all — the pure vacuous subject set. An
+    /// uninhabited enum, so `successors`/`is_terminal`/`is_good_terminal` are
+    /// unreachable by construction; only `all()` is ever called.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    enum EmptyStateSpaceFsm {}
+
+    impl ConvergentFsm for EmptyStateSpaceFsm {
+        fn all() -> &'static [Self] {
+            &[]
+        }
+        fn successors(&self) -> Vec<Self> {
+            match *self {}
+        }
+        fn is_terminal(&self) -> bool {
+            match *self {}
+        }
+        fn is_good_terminal(&self) -> bool {
+            match *self {}
+        }
+    }
+
+    #[test]
+    fn an_empty_state_space_is_a_defect_never_a_green_proof() {
+        let err = assert_convergent_fsm::<EmptyStateSpaceFsm>()
+            .expect_err("a proof over zero states must not report success");
+        assert!(
+            err.contains("EmptyStateSpace"),
+            "the failure must name the defect kind: {err}"
+        );
+        assert!(
+            err.contains("examined nothing"),
+            "the failure must say what was not done: {err}"
+        );
+    }
+
+    #[test]
+    fn the_emptiness_defect_is_reported_exactly_once_not_once_per_check() {
+        // `assert_convergent_fsm` short-circuits, so the report carries one
+        // defect rather than four zero-information vacuous passes.
+        assert_eq!(check_state_space_non_empty::<EmptyStateSpaceFsm>().len(), 1);
+        let err = assert_convergent_fsm::<EmptyStateSpaceFsm>().expect_err("must fail");
+        assert!(
+            err.contains("1 defect(s)"),
+            "emptiness must be reported once: {err}"
+        );
+    }
+
+    #[test]
+    fn every_individual_check_refuses_an_empty_state_space() {
+        // The guard is on the CLASS, not just the aggregator: calling any
+        // check directly is protected exactly as calling it through
+        // `assert_convergent_fsm` is.
+        for (name, defects) in [
+            ("graph_closed", check_graph_closed::<EmptyStateSpaceFsm>()),
+            (
+                "terminals_sound",
+                check_terminals_sound::<EmptyStateSpaceFsm>(),
+            ),
+            ("no_traps", check_no_traps::<EmptyStateSpaceFsm>()),
+            ("all_converge", check_all_converge::<EmptyStateSpaceFsm>()),
+        ] {
+            assert!(
+                defects.iter().any(|d| d.kind == DefectKind::EmptyStateSpace),
+                "check_{name} reported a vacuous pass over zero states"
+            );
+        }
+    }
+
+    #[test]
+    fn a_populated_state_space_adds_no_emptiness_defect() {
+        // The guard must not fire on the happy path — a vacuous guard that
+        // fires on everything is as useless as one that fires on nothing.
+        assert!(check_state_space_non_empty::<Good>().is_empty());
+        assert!(
+            !check_graph_closed::<Good>()
+                .iter()
+                .any(|d| d.kind == DefectKind::EmptyStateSpace)
+        );
     }
 
     #[test]
