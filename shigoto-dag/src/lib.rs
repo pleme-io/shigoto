@@ -37,6 +37,16 @@ pub enum DagError {
 /// check on every insert; instead, cycles are detected at
 /// `toposort()` / `waves()`, where consumers must run before
 /// scheduling anyway.
+///
+/// `Debug` is derived deliberately, not incidentally. Without it a consumer
+/// that wraps a `Dag` cannot derive `Debug` either, and the first thing that
+/// silently breaks is `Result::unwrap_err()` / `expect_err()` — whose
+/// `T: Debug` bound is what makes a *test* compile. Measured 2026-07-31:
+/// `caixa-core` and `caixa-actions` had test targets that could not build for
+/// exactly this reason, so no test in either crate ran at all, and nothing
+/// reported it. A missing `Debug` on a widely-wrapped type does not read as a
+/// missing trait; it reads as a green repo whose suite never executed.
+#[derive(Debug)]
 pub struct Dag {
     graph: DiGraph<JobId, ()>,
     index: HashMap<JobId, NodeIndex>,
@@ -299,5 +309,33 @@ mod tests {
         assert!(d.predecessors(&n("r", "root")).is_empty());
         // Unknown node yields empty vec.
         assert!(d.predecessors(&n("r", "ghost")).is_empty());
+    }
+
+    /// A wrapping consumer must be able to derive `Debug`, and a `Result`
+    /// carrying a `Dag` must support `unwrap_err`.
+    ///
+    /// This is a COMPILE-TIME seal, not a behavioural one: delete the
+    /// `#[derive(Debug)]` on `Dag` and this test does not fail, it fails to
+    /// BUILD — `Wrapper` stops deriving and `unwrap_err` loses its `T: Debug`
+    /// bound. That is exactly the shape of the outage it guards, and it is
+    /// why the assertion is a wrapper rather than a bare `Dag`: `Dag`'s own
+    /// crate would notice a missing `Debug` immediately, while a CONSUMER
+    /// three repos away notices only that its test target silently stopped
+    /// compiling (measured in caixa, 2026-07-31).
+    #[test]
+    fn a_wrapping_consumer_can_derive_debug_and_unwrap_err() {
+        #[derive(Debug)]
+        struct Wrapper {
+            #[allow(dead_code)]
+            dag: Dag,
+        }
+
+        let w = Wrapper { dag: Dag::new() };
+        assert!(format!("{w:?}").contains("Dag"));
+
+        // The precise call whose `T: Debug` bound broke every caixa test
+        // target. `Ok` here would panic, so the error path is the assertion.
+        let r: Result<Dag, &str> = Err("boom");
+        assert_eq!(r.unwrap_err(), "boom");
     }
 }
