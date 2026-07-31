@@ -3,7 +3,7 @@ resolver = "2"
 members = ["shigoto", "shigoto-types", "shigoto-dag", "shigoto-scheduler", "shigoto-budget", "shigoto-rank", "shigoto-fsm", "shigoto-retry", "shigoto-gate", "shigoto-emit", "shigoto-test"]
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT"
@@ -11,17 +11,17 @@ repository = "https://github.com/pleme-io/shigoto"
 authors = ["pleme-io"]
 
 [workspace.dependencies]
-shigoto = { version = "0.1.0", path = "shigoto" }
-shigoto-types = { version = "0.1.0", path = "shigoto-types" }
-shigoto-dag = { version = "0.1.0", path = "shigoto-dag" }
-shigoto-scheduler = { version = "0.1.0", path = "shigoto-scheduler" }
-shigoto-budget = { version = "0.1.0", path = "shigoto-budget" }
-shigoto-rank = { version = "0.1.0", path = "shigoto-rank" }
-shigoto-fsm = { version = "0.1.0", path = "shigoto-fsm" }
-shigoto-retry = { version = "0.1.0", path = "shigoto-retry" }
-shigoto-gate = { version = "0.1.0", path = "shigoto-gate" }
-shigoto-emit = { version = "0.1.0", path = "shigoto-emit" }
-shigoto-test = { version = "0.1.0", path = "shigoto-test" }
+shigoto = { version = "0.1.12", path = "shigoto" }
+shigoto-types = { version = "0.1.12", path = "shigoto-types" }
+shigoto-dag = { version = "0.1.12", path = "shigoto-dag" }
+shigoto-scheduler = { version = "0.1.12", path = "shigoto-scheduler" }
+shigoto-budget = { version = "0.1.12", path = "shigoto-budget" }
+shigoto-rank = { version = "0.1.12", path = "shigoto-rank" }
+shigoto-fsm = { version = "0.1.12", path = "shigoto-fsm" }
+shigoto-retry = { version = "0.1.12", path = "shigoto-retry" }
+shigoto-gate = { version = "0.1.12", path = "shigoto-gate" }
+shigoto-emit = { version = "0.1.12", path = "shigoto-emit" }
+shigoto-test = { version = "0.1.12", path = "shigoto-test" }
 
 # Pleme-io sibling-directory path deps for typed-dispatcher
 # catalog integration (theory/UNIFIED-COMPUTING-MODEL.md §VI).
