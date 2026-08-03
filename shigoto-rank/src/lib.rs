@@ -64,7 +64,12 @@ pub struct UrgencyWeights {
 
 impl Default for UrgencyWeights {
     fn default() -> Self {
-        UrgencyWeights { staleness: 1, behind_target: 3600, drift: 600, fairness_deficit: 1800 }
+        UrgencyWeights {
+            staleness: 1,
+            behind_target: 3600,
+            drift: 600,
+            fairness_deficit: 1800,
+        }
     }
 }
 
@@ -114,7 +119,11 @@ pub trait Schedulable {
     /// class ascending (Critical first), urgency descending (most urgent
     /// first, via `Reverse`), id ascending (stable tiebreak).
     fn rank_key(&self, w: &UrgencyWeights) -> (PriorityClass, std::cmp::Reverse<u64>, String) {
-        (self.priority_class(), std::cmp::Reverse(self.urgency(w)), self.sched_id().to_string())
+        (
+            self.priority_class(),
+            std::cmp::Reverse(self.urgency(w)),
+            self.sched_id().to_string(),
+        )
     }
 }
 
@@ -175,16 +184,32 @@ mod tests {
     }
 
     impl Schedulable for Mock {
-        fn sched_id(&self) -> &str { &self.id }
-        fn priority_class(&self) -> PriorityClass { self.class }
-        fn staleness_secs(&self) -> u64 { self.staleness }
-        fn behind_target(&self) -> bool { self.behind }
-        fn drift_magnitude(&self) -> u32 { self.drift }
-        fn fairness_deficit(&self) -> u64 { self.deficit }
-        fn eligible(&self, now: u64) -> bool { self.deps_ready && now >= self.backoff_until }
+        fn sched_id(&self) -> &str {
+            &self.id
+        }
+        fn priority_class(&self) -> PriorityClass {
+            self.class
+        }
+        fn staleness_secs(&self) -> u64 {
+            self.staleness
+        }
+        fn behind_target(&self) -> bool {
+            self.behind
+        }
+        fn drift_magnitude(&self) -> u32 {
+            self.drift
+        }
+        fn fairness_deficit(&self) -> u64 {
+            self.deficit
+        }
+        fn eligible(&self, now: u64) -> bool {
+            self.deps_ready && now >= self.backoff_until
+        }
     }
 
-    fn w() -> UrgencyWeights { UrgencyWeights::default() }
+    fn w() -> UrgencyWeights {
+        UrgencyWeights::default()
+    }
 
     #[test]
     fn priority_class_dominates_urgency() {
@@ -193,8 +218,15 @@ mod tests {
         loud.drift = 1000;
         let crit = Mock::new("crit", PriorityClass::Critical);
         let pending = vec![loud, crit];
-        let order: Vec<&str> = rank(&pending, 0, &w()).iter().map(|m| m.sched_id()).collect();
-        assert_eq!(order, vec!["crit", "loud"], "Critical precedes a much louder Normal");
+        let order: Vec<&str> = rank(&pending, 0, &w())
+            .iter()
+            .map(|m| m.sched_id())
+            .collect();
+        assert_eq!(
+            order,
+            vec!["crit", "loud"],
+            "Critical precedes a much louder Normal"
+        );
     }
 
     #[test]
@@ -204,7 +236,11 @@ mod tests {
         let mut b = Mock::new("b", PriorityClass::Normal);
         b.drift = 50;
         let pending = vec![a, b];
-        assert_eq!(rank(&pending, 0, &w())[0].sched_id(), "b", "more drift = more urgent");
+        assert_eq!(
+            rank(&pending, 0, &w())[0].sched_id(),
+            "b",
+            "more drift = more urgent"
+        );
     }
 
     #[test]
@@ -227,8 +263,15 @@ mod tests {
         backoff.backoff_until = 100;
         let ready = Mock::new("ready", PriorityClass::Low);
         let pending = vec![blocked, backoff, ready];
-        let order: Vec<&str> = rank(&pending, 50, &w()).iter().map(|m| m.sched_id()).collect();
-        assert_eq!(order, vec!["ready"], "deps-blocked + in-backoff excluded; only ready Low survives");
+        let order: Vec<&str> = rank(&pending, 50, &w())
+            .iter()
+            .map(|m| m.sched_id())
+            .collect();
+        assert_eq!(
+            order,
+            vec!["ready"],
+            "deps-blocked + in-backoff excluded; only ready Low survives"
+        );
     }
 
     #[test]
@@ -239,7 +282,10 @@ mod tests {
             Mock::new("alpha", PriorityClass::Normal),
             Mock::new("mu", PriorityClass::Normal),
         ];
-        let fwd: Vec<&str> = rank(&pending, 0, &w()).iter().map(|m| m.sched_id()).collect();
+        let fwd: Vec<&str> = rank(&pending, 0, &w())
+            .iter()
+            .map(|m| m.sched_id())
+            .collect();
         assert_eq!(fwd, vec!["alpha", "mu", "zeta"]);
     }
 
@@ -252,7 +298,11 @@ mod tests {
                 Mock::new(&id, PriorityClass::Normal)
             })
             .collect();
-        assert_eq!(pick(&pending, 0, &w(), 8).len(), 8, "100k pending → bounded wave");
+        assert_eq!(
+            pick(&pending, 0, &w(), 8).len(),
+            8,
+            "100k pending → bounded wave"
+        );
     }
 
     #[test]

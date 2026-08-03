@@ -205,7 +205,9 @@ pub fn check_terminals_sound<F: ConvergentFsm>() -> Vec<FsmDefect> {
         if s.is_terminal() && !s.is_good_terminal() {
             defects.push(FsmDefect {
                 kind: DefectKind::BadTerminalSink,
-                message: format!("{s:?} is a terminal but not a good terminal — a failure sink with no exit"),
+                message: format!(
+                    "{s:?} is a terminal but not a good terminal — a failure sink with no exit"
+                ),
             });
         }
     }
@@ -286,7 +288,10 @@ pub fn assert_convergent_fsm<F: ConvergentFsm>() -> Result<(), String> {
     if defects.is_empty() {
         return Ok(());
     }
-    let mut msg = format!("FSM convergence proof failed with {} defect(s):", defects.len());
+    let mut msg = format!(
+        "FSM convergence proof failed with {} defect(s):",
+        defects.len()
+    );
     for d in &defects {
         msg.push_str("\n  - ");
         msg.push_str(&d.to_string());
@@ -310,7 +315,13 @@ mod tests {
 
     impl ConvergentFsm for Good {
         fn all() -> &'static [Self] {
-            &[Good::Pending, Good::Working, Good::Ready, Good::Failed, Good::Destroyed]
+            &[
+                Good::Pending,
+                Good::Working,
+                Good::Ready,
+                Good::Failed,
+                Good::Destroyed,
+            ]
         }
         fn successors(&self) -> Vec<Self> {
             match self {
@@ -398,7 +409,9 @@ mod tests {
             ("all_converge", check_all_converge::<EmptyStateSpaceFsm>()),
         ] {
             assert!(
-                defects.iter().any(|d| d.kind == DefectKind::EmptyStateSpace),
+                defects
+                    .iter()
+                    .any(|d| d.kind == DefectKind::EmptyStateSpace),
                 "check_{name} reported a vacuous pass over zero states"
             );
         }
@@ -460,7 +473,10 @@ mod tests {
             defects.iter().any(|d| d.kind == DefectKind::DeadEndTrap),
             "harness must flag Stuck as a dead-end trap"
         );
-        assert!(assert_convergent_fsm::<Trap>().is_err(), "a trapped FSM must fail the full proof");
+        assert!(
+            assert_convergent_fsm::<Trap>().is_err(),
+            "a trapped FSM must fail the full proof"
+        );
     }
 
     /// A failure sink: a terminal that is not good and has no exit.
@@ -491,7 +507,11 @@ mod tests {
     #[test]
     fn the_harness_catches_a_failure_sink() {
         let defects = check_terminals_sound::<Sink>();
-        assert!(defects.iter().any(|d| d.kind == DefectKind::BadTerminalSink));
+        assert!(
+            defects
+                .iter()
+                .any(|d| d.kind == DefectKind::BadTerminalSink)
+        );
         // Start can still reach Done, so convergence per se holds — but the bad
         // sink is caught by terminal-soundness. The full proof fails.
         assert!(assert_convergent_fsm::<Sink>().is_err());
@@ -527,7 +547,11 @@ mod tests {
     fn the_harness_catches_a_non_converging_cycle() {
         let defects = check_all_converge::<Diverge>();
         assert!(
-            defects.iter().filter(|d| d.kind == DefectKind::CannotConverge).count() >= 2,
+            defects
+                .iter()
+                .filter(|d| d.kind == DefectKind::CannotConverge)
+                .count()
+                >= 2,
             "both A and B are stuck in a cycle that never reaches a good terminal"
         );
         assert!(!reaches_good_terminal(Diverge::A));
@@ -557,7 +581,14 @@ mod tests {
     }
     impl ConvergentFsm for Reconcile {
         fn all() -> &'static [Self] {
-            &[Reconcile::Pending, Reconcile::Working, Reconcile::Ready, Reconcile::Drifted, Reconcile::Failed, Reconcile::Gone]
+            &[
+                Reconcile::Pending,
+                Reconcile::Working,
+                Reconcile::Ready,
+                Reconcile::Drifted,
+                Reconcile::Failed,
+                Reconcile::Gone,
+            ]
         }
         fn successors(&self) -> Vec<Self> {
             match self {
@@ -586,11 +617,15 @@ mod tests {
     fn cyclic_fsm_with_a_reentrant_good_state_converges() {
         // Every state reaches Ready (re-entrant good) or Gone (sink); Ready having
         // a successor must NOT make this fail (the absorbing model would have).
-        assert_convergent_fsm::<Reconcile>()
-            .expect("a cyclic reconcile FSM with a re-entrant good resting state must be convergent");
+        assert_convergent_fsm::<Reconcile>().expect(
+            "a cyclic reconcile FSM with a re-entrant good resting state must be convergent",
+        );
         // Ready is reachable-as-resting from every state, though it is not a terminal.
         assert!(reaches_good_terminal(Reconcile::Drifted));
-        assert!(!Reconcile::Ready.is_terminal(), "Ready is a resting state, not a sink");
+        assert!(
+            !Reconcile::Ready.is_terminal(),
+            "Ready is a resting state, not a sink"
+        );
         assert!(Reconcile::Ready.is_good_resting_state());
     }
 
@@ -598,7 +633,7 @@ mod tests {
     /// the re-entrant relaxation didn't weaken the proof.
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
     enum Stuck {
-        Spin,    // Spin→Churn→Spin, never reaches Done
+        Spin, // Spin→Churn→Spin, never reaches Done
         Churn,
         Done,
     }
@@ -623,6 +658,12 @@ mod tests {
     #[test]
     fn a_non_good_cycle_still_fails_convergence() {
         let d = check_all_converge::<Stuck>();
-        assert!(d.iter().filter(|x| x.kind == DefectKind::CannotConverge).count() >= 2, "Spin+Churn never reach Done");
+        assert!(
+            d.iter()
+                .filter(|x| x.kind == DefectKind::CannotConverge)
+                .count()
+                >= 2,
+            "Spin+Churn never reach Done"
+        );
     }
 }

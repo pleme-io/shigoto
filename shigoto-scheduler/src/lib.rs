@@ -1439,10 +1439,7 @@ mod tests {
         let start = std::time::Instant::now();
         scheduler.tick(&mut dag).await.unwrap();
         assert!(
-            matches!(
-                scheduler.phase_of(&id).await,
-                JobPhase::Retrying { .. }
-            ),
+            matches!(scheduler.phase_of(&id).await, JobPhase::Retrying { .. }),
             "expected Retrying after first failure, got {:?}",
             scheduler.phase_of(&id).await
         );

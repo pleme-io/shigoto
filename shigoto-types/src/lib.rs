@@ -657,10 +657,179 @@ impl Snapshot {
         }
         counts
     }
+
+    /// The scheduler's state as a PUBLISHED, typed summary.
+    ///
+    /// ── ★ WHY THIS EXISTS: CONSUMERS WERE SCRAPING ─────────────────────
+    /// `Snapshot` carries a `HashMap<JobId, JobPhase>` and no
+    /// serialization, so every out-of-process reader had to reconstruct
+    /// the counts from whatever text it could get. seki's `shigoto`
+    /// prompt segment did it by counting `"phase":"Running"` SUBSTRINGS in
+    /// the response body — and a body containing neither the substrings
+    /// nor explicit fields tallied to zero, which its renderer styles as
+    /// "shigoto: idle". An error page read as a healthy idle scheduler.
+    ///
+    /// Substring-tallying is not the consumer's mistake to fix; it is what
+    /// a consumer does when no contract is offered. `phase_counts` already
+    /// computed the right numbers — they simply were not published. This
+    /// is the publication, and it is derived from that same function so
+    /// the two can never disagree.
+    #[must_use]
+    pub fn summary(&self) -> SnapshotSummary {
+        let counts = self.phase_counts();
+        let get = |k: &str| counts.get(k).copied().unwrap_or(0);
+        SnapshotSummary {
+            total: u32::try_from(self.phases.len()).unwrap_or(u32::MAX),
+            running: get("running"),
+            // "Pending" to an operator means "waiting to run", which is
+            // three FSM phases, not the one that happens to share the
+            // name. A consumer summing these itself would have to know the
+            // FSM — the exact coupling this type removes.
+            pending: get("pending") + get("gated") + get("ready"),
+            failed: get("failed"),
+            retrying: get("retrying"),
+            deadlettered: get("deadlettered"),
+            waiting_for_operator: get("waiting-for-operator"),
+            succeeded: get("succeeded"),
+            skipped: get("skipped"),
+        }
+    }
+}
+
+/// A serializable, out-of-process view of scheduler state.
+///
+/// Every field is a COUNT the scheduler measured, so a reader never has to
+/// infer one. The distinction that matters downstream: absence of this
+/// document means "could not read the scheduler", while a document whose
+/// counts are all zero means "read it, and it is idle". Those two are
+/// indistinguishable when a consumer is scraping text, and conflating them
+/// is how an unreachable scheduler renders as a healthy one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSummary {
+    /// Every job the scheduler knows about, in any phase.
+    pub total: u32,
+    pub running: u32,
+    /// Pending + Gated + Ready — everything waiting to run.
+    pub pending: u32,
+    pub failed: u32,
+    pub retrying: u32,
+    pub deadlettered: u32,
+    pub waiting_for_operator: u32,
+    pub succeeded: u32,
+    pub skipped: u32,
+}
+
+impl SnapshotSummary {
+    /// Nothing running and nothing waiting. Named so a consumer asks the
+    /// scheduler what idle MEANS rather than guessing that `(0, 0)` is it.
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        self.running == 0 && self.pending == 0
+    }
+
+    /// Anything a human should look at: failed, retrying, deadlettered, or
+    /// blocked on an operator. Broader than `is_idle`'s complement, and
+    /// deliberately so — a scheduler can be idle AND unhealthy.
+    #[must_use]
+    pub fn needs_attention(&self) -> u32 {
+        self.failed + self.retrying + self.deadlettered + self.waiting_for_operator
+    }
 }
 
 #[cfg(test)]
 mod fsm_tests {
+
+    fn snap(phases: Vec<(&str, JobPhase)>) -> Snapshot {
+        Snapshot {
+            phases: phases
+                .into_iter()
+                .map(|(id, p)| {
+                    (
+                        JobId {
+                            scope: JobScope::Global,
+                            kind: JobKindId(id.to_owned()),
+                            subject: JobSubject::None,
+                        },
+                        p,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// ── ★ "WAITING TO RUN" IS THREE PHASES, NOT ONE ────────────────────
+    /// Pending / Gated / Ready are all jobs an operator would call
+    /// pending. A consumer summing these itself has to know the FSM, and
+    /// would silently under-report the moment a phase is added — which is
+    /// exactly the coupling this summary exists to remove.
+    #[test]
+    fn pending_spans_every_waiting_phase() {
+        let s = snap(vec![
+            ("a", JobPhase::Pending),
+            ("b", JobPhase::Gated),
+            ("c", JobPhase::Ready),
+            ("d", JobPhase::Running),
+        ])
+        .summary();
+        assert_eq!(s.pending, 3, "pending must span Pending+Gated+Ready");
+        assert_eq!(s.running, 1);
+        assert_eq!(s.total, 4);
+    }
+
+    /// A scheduler can be idle AND unhealthy: nothing running, nothing
+    /// waiting, and jobs sitting deadlettered. Reporting only "idle" there
+    /// is the false-green this whole type is meant to prevent.
+    #[test]
+    fn idle_and_needing_attention_are_independent() {
+        let s = snap(vec![
+            ("a", JobPhase::Deadlettered),
+            ("b", JobPhase::WaitingForOperator),
+        ])
+        .summary();
+        assert!(s.is_idle(), "nothing is running or waiting to run");
+        assert_eq!(s.needs_attention(), 2, "but two jobs need a human");
+    }
+
+    #[test]
+    fn an_empty_scheduler_is_idle_and_healthy() {
+        let s = snap(vec![]).summary();
+        assert!(s.is_idle());
+        assert_eq!(s.needs_attention(), 0);
+        assert_eq!(s.total, 0);
+    }
+
+    /// The summary is DERIVED from `phase_counts`, so the two cannot
+    /// disagree — pinned because a hand-maintained second tally is exactly
+    /// how they would.
+    #[test]
+    fn the_summary_agrees_with_phase_counts() {
+        let s = snap(vec![
+            ("a", JobPhase::Running),
+            ("b", JobPhase::Running),
+            ("c", JobPhase::Succeeded),
+            ("d", JobPhase::Deadlettered),
+        ]);
+        let counts = s.phase_counts();
+        let sum = s.summary();
+        assert_eq!(sum.running, counts["running"]);
+        assert_eq!(sum.succeeded, counts["succeeded"]);
+        assert_eq!(sum.deadlettered, counts["deadlettered"]);
+    }
+
+    /// It round-trips as JSON — the whole point is that an out-of-process
+    /// reader gets typed fields instead of tallying substrings.
+    #[test]
+    fn the_summary_round_trips_as_json_with_named_fields() {
+        let s = snap(vec![("a", JobPhase::Running), ("b", JobPhase::Ready)]).summary();
+        let json = serde_json::to_string(&s).expect("serializes");
+        assert!(json.contains("\"running\":1"), "{json}");
+        assert!(json.contains("\"pending\":1"), "{json}");
+        assert!(json.contains("\"waitingForOperator\":0"), "{json}");
+        let back: SnapshotSummary = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back, s);
+    }
+
     use super::*;
 
     fn pass() -> Signal {
