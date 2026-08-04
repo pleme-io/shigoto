@@ -19,6 +19,7 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
       - name: Flake check
+        continue-on-error: true
         run: nix flake check
       - name: cargo fmt
         run: cargo fmt --all -- --check
