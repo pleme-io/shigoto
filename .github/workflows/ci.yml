@@ -1,5 +1,17 @@
 name: ci
 
+# skip-workflow-shim: `nix flake check` is deliberately non-fatal here
+# (continue-on-error, for a devenv devShell issue — see 8b63ccb), and
+# substrate's cargo-ci.yml runs it FATALLY with no input to soften it. Shimming
+# this file would silently turn a knowingly-tolerated failure into a red gate.
+#
+# Reviewed 2026-08-04 in the fleet-wide GHA workflow review. Five sibling repos
+# carrying this same template (calha, ishou, ponte, tear, and the eight
+# converted on 2026-08-01) WERE shimmed; this one is held back on the one axis
+# that actually differs. If a second repo ever needs the same tolerance, that
+# is when cargo-ci earns a `flake-check-advisory` input and this waiver goes
+# away — one instance is not a pattern.
+
 on:
   push:
     branches:
