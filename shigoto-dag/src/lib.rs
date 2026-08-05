@@ -50,6 +50,9 @@ pub enum DagError {
 pub struct Dag {
     graph: DiGraph<JobId, ()>,
     index: HashMap<JobId, NodeIndex>,
+    /// Jobs the caller actually DECLARED, as opposed to nodes that only
+    /// exist because an edge mentioned them. See [`Dag::validate`].
+    declared: HashSet<JobId>,
 }
 
 impl Dag {
@@ -58,11 +61,23 @@ impl Dag {
         Self {
             graph: DiGraph::new(),
             index: HashMap::new(),
+            declared: HashSet::new(),
         }
     }
 
     /// Add a node if absent; return its index either way.
+    ///
+    /// This DECLARES the job — it marks it as one the caller intends to
+    /// run, which is what [`Dag::validate`] checks edges against.
     pub fn ensure_node(&mut self, id: JobId) -> NodeIndex {
+        let idx = self.node_index(id.clone());
+        self.declared.insert(id);
+        idx
+    }
+
+    /// Intern a node without declaring it. Used by [`Dag::add_edge`] so
+    /// that an edge naming a job nobody declared stays detectable.
+    fn node_index(&mut self, id: JobId) -> NodeIndex {
         if let Some(idx) = self.index.get(&id) {
             return *idx;
         }
@@ -74,12 +89,47 @@ impl Dag {
     /// Add edge `from → to`. Idempotent: re-adding an existing edge is
     /// a no-op (we de-dup explicitly because petgraph would otherwise
     /// store parallel edges).
+    /// An endpoint that was never declared is interned but NOT marked
+    /// declared, so [`Dag::validate`] can report it. Previously both
+    /// endpoints went through `ensure_node`, which silently materialised
+    /// a node for a typo'd dependency — making `DagError::DanglingEdge`
+    /// unconstructible and a mistyped edge look like a real job that
+    /// simply never ran.
     pub fn add_edge(&mut self, from: JobId, to: JobId) {
-        let f = self.ensure_node(from);
-        let t = self.ensure_node(to);
+        let f = self.node_index(from);
+        let t = self.node_index(to);
         if !self.graph.contains_edge(f, t) {
             self.graph.add_edge(f, t, ());
         }
+    }
+
+    /// Check the graph before scheduling: every edge endpoint must be a
+    /// declared job, and the graph must be acyclic.
+    ///
+    /// Call this once after construction. `toposort()` and `waves()`
+    /// find cycles on their own, but neither can see a dangling edge —
+    /// by then a typo'd dependency is indistinguishable from a real node
+    /// with no work attached.
+    ///
+    /// # Errors
+    ///
+    /// [`DagError::DanglingEdge`] naming the first undeclared endpoint,
+    /// or [`DagError::Cycle`] naming a node on the cycle.
+    pub fn validate(&self) -> Result<(), DagError> {
+        let mut dangling: Vec<&JobId> = self
+            .index
+            .keys()
+            .filter(|id| !self.declared.contains(*id))
+            .collect();
+        // deterministic report: the same malformed graph names the same
+        // job every run, so a failure is reproducible from its message.
+        // JobId is not Ord, so sort by its Debug rendering — this is a
+        // diagnostic ordering, not a semantic one.
+        dangling.sort_by_key(|id| format!("{id:?}"));
+        if let Some(id) = dangling.first() {
+            return Err(DagError::DanglingEdge((*id).clone()));
+        }
+        self.toposort().map(|_| ())
     }
 
     /// Topologically sort the entire DAG. Returns nodes in order
@@ -337,5 +387,46 @@ mod tests {
         // target. `Ok` here would panic, so the error path is the assertion.
         let r: Result<Dag, &str> = Err("boom");
         assert_eq!(r.unwrap_err(), "boom");
+    }
+
+    #[test]
+    fn validate_rejects_an_edge_to_an_undeclared_job() {
+        // The regression: add_edge used to ensure_node BOTH endpoints, so a
+        // typo'd dependency silently became a real node with no work attached
+        // and DagError::DanglingEdge was unconstructible dead code.
+        let mut d = Dag::new();
+        d.ensure_node(n("build","x"));
+        d.add_edge(n("build","x"), n("tset","x")); // typo for "test"
+        match d.validate() {
+            Err(DagError::DanglingEdge(id)) => assert_eq!(id, n("tset","x")),
+            other => panic!("expected DanglingEdge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_fully_declared_graph() {
+        let mut d = Dag::new();
+        d.ensure_node(n("build","x"));
+        d.ensure_node(n("test","x"));
+        d.add_edge(n("build","x"), n("test","x"));
+        assert!(d.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_still_reports_cycles() {
+        let mut d = Dag::new();
+        d.ensure_node(n("a","x"));
+        d.ensure_node(n("b","x"));
+        d.add_edge(n("a","x"), n("b","x"));
+        d.add_edge(n("b","x"), n("a","x"));
+        assert!(matches!(d.validate(), Err(DagError::Cycle(_))));
+    }
+
+    #[test]
+    fn add_edge_alone_does_not_declare_either_endpoint() {
+        let mut d = Dag::new();
+        d.add_edge(n("x","x"), n("y","x"));
+        // both endpoints are dangling; the report is deterministic
+        assert!(matches!(d.validate(), Err(DagError::DanglingEdge(_))));
     }
 }
