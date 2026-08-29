@@ -120,9 +120,9 @@ pub enum GateOutcome {
 /// * **`reduce` has no gate identity to witness with.** It takes
 ///   `&[GateOutcome]` — outcomes only — so `Subjects<GateRef>` also requires
 ///   a signature change carrying each gate's ref. That change *is* breaking:
-///   `camelot-fabric-startup` calls `reduce(&[outcome])` positionally
-///   (`src/startup/interpreter.rs:59`). Scope it as such; do not ship it
-///   silently alongside the dep flip.
+///   a private fabric-startup orchestrator calls `reduce(&[outcome])`
+///   positionally (`src/startup/interpreter.rs:59`). Scope it as such; do
+///   not ship it silently alongside the dep flip.
 #[must_use]
 pub fn reduce(outcomes: &[GateOutcome]) -> GateAggregate {
     let mut any_wait = false;

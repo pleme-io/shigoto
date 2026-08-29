@@ -137,9 +137,9 @@ impl std::fmt::Display for FsmDefect {
 /// the evidence looks like the strongest kind: a green CI gate.
 ///
 /// It is not hypothetical. `assert_convergent_fsm` is consumed as a
-/// CI-forcing-function by three repos outside shigoto
-/// (`camelot-fabric-startup`, `breathe-admission`, `breathe-lifecycle`), and
-/// each of those green tests rested on this unchecked precondition.
+/// CI-forcing-function by three repos outside shigoto (a private
+/// fabric-startup orchestrator, `breathe-admission`, `breathe-lifecycle`),
+/// and each of those green tests rested on this unchecked precondition.
 ///
 /// # Tier-honest — this closes emptiness, NOT incompleteness
 ///
