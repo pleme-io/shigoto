@@ -395,10 +395,10 @@ mod tests {
         // typo'd dependency silently became a real node with no work attached
         // and DagError::DanglingEdge was unconstructible dead code.
         let mut d = Dag::new();
-        d.ensure_node(n("build","x"));
-        d.add_edge(n("build","x"), n("tset","x")); // typo for "test"
+        d.ensure_node(n("build", "x"));
+        d.add_edge(n("build", "x"), n("tset", "x")); // typo for "test"
         match d.validate() {
-            Err(DagError::DanglingEdge(id)) => assert_eq!(id, n("tset","x")),
+            Err(DagError::DanglingEdge(id)) => assert_eq!(id, n("tset", "x")),
             other => panic!("expected DanglingEdge, got {other:?}"),
         }
     }
@@ -406,26 +406,26 @@ mod tests {
     #[test]
     fn validate_accepts_a_fully_declared_graph() {
         let mut d = Dag::new();
-        d.ensure_node(n("build","x"));
-        d.ensure_node(n("test","x"));
-        d.add_edge(n("build","x"), n("test","x"));
+        d.ensure_node(n("build", "x"));
+        d.ensure_node(n("test", "x"));
+        d.add_edge(n("build", "x"), n("test", "x"));
         assert!(d.validate().is_ok());
     }
 
     #[test]
     fn validate_still_reports_cycles() {
         let mut d = Dag::new();
-        d.ensure_node(n("a","x"));
-        d.ensure_node(n("b","x"));
-        d.add_edge(n("a","x"), n("b","x"));
-        d.add_edge(n("b","x"), n("a","x"));
+        d.ensure_node(n("a", "x"));
+        d.ensure_node(n("b", "x"));
+        d.add_edge(n("a", "x"), n("b", "x"));
+        d.add_edge(n("b", "x"), n("a", "x"));
         assert!(matches!(d.validate(), Err(DagError::Cycle(_))));
     }
 
     #[test]
     fn add_edge_alone_does_not_declare_either_endpoint() {
         let mut d = Dag::new();
-        d.add_edge(n("x","x"), n("y","x"));
+        d.add_edge(n("x", "x"), n("y", "x"));
         // both endpoints are dangling; the report is deterministic
         assert!(matches!(d.validate(), Err(DagError::DanglingEdge(_))));
     }
