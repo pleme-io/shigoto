@@ -1,6 +1,6 @@
 //! Durable persistence for [`crate::InProcessScheduler`] FSM state.
 //!
-//! `theory/SHIGOTO.md` names in-memory-only state as a standing v0.1 gap
+//! In-memory-only state is a standing v0.1 gap
 //! (`InProcessScheduler`'s own doc comment: "a scheduler restart drops every
 //! non-terminal job back to Pending"). This module closes it the same way
 //! `formigueiro`'s `FilePlanStore` closes the analogous gap for its

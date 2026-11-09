@@ -1,6 +1,6 @@
 //! shigoto-emit — typed transition emitter.
 //!
-//! Spec: `theory/SHIGOTO.md` §III.10 + §VIII. Every FSM transition
+//! Every FSM transition
 //! emits one event; sinks compose. The transition log is the
 //! canonical history — `tend report`, K8s controller status,
 //! observability dashboards, MCP operator surface all read the same
@@ -16,7 +16,7 @@ use shigoto_types::{JobId, OutputSink, TransitionEvent};
 /// Receivers of `TransitionEvent`. Thin trait over the canonical
 /// [`shigoto_types::sink::Sink<TransitionEvent>`] so every consumer
 /// writing `Arc<dyn TransitionEmitter>` keeps working unchanged after
-/// the theory/CONVERGENCE-ADOPTION.md Phase 0.1 extraction. The blanket
+/// the `Sink` extraction. The blanket
 /// impl below means any `Sink<TransitionEvent>` impl auto-satisfies
 /// `TransitionEmitter` — no per-impl wiring at the consumer side.
 ///

@@ -1,7 +1,6 @@
 //! Typed pure action-decision — the canonical `Decision` trait every
 //! fleet-wide "decide a controller action from a structured context"
 //! rule consumes.
-//! Spec: `theory/CONVERGENCE-ADOPTION.md` §II.3.
 //!
 //! A **lightweight, general** convergence primitive — pure, no I/O, no
 //! domain coupling. Homed in `shigoto-types` next to its siblings

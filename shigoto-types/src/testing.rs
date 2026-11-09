@@ -1,7 +1,6 @@
 //! Test-helpers for typed-primitive authors.
 //!
-//! Codifies the **Determinism law** pattern named in
-//! `theory/PATTERN-EXTRACTION.md` Pattern 10 — every pure primitive
+//! Codifies the **Determinism law** pattern: every pure primitive
 //! in the substrate ships a test asserting that the same input
 //! produces the same output across repeated invocations.
 //!
@@ -144,8 +143,8 @@ where
 // machine-checked theorem any impl can invoke from its own tests — so
 // no adopter re-spells the law boilerplate that `magma-converge`'s
 // ReactivePolicy (14 hand-written law tests) and `shigoto-types`' own
-// `TestPolicy` currently duplicate. Per `theory/CONVERGENCE-ADOPTION.md`
-// §VI Pillar 10 (proptest + tameshi proof discipline) + the "promises
+// `TestPolicy` currently duplicate. Per Pillar 10
+// (proptest + tameshi proof discipline) + the "promises
 // become theorems" thesis: the trait's promise is *proven* per impl,
 // not asserted.
 

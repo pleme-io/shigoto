@@ -4,9 +4,6 @@
 //! consumers depend on `shigoto = "0.1"` and reach the full algebra
 //! via `use shigoto::{Job, JobId, Scheduler, ...};` without naming
 //! every sub-crate.
-//!
-//! Canonical spec: `theory/SHIGOTO.md`.
-//! Theory frame: `theory/THEORY.md` §IV (Motion).
 
 #![forbid(unsafe_code)]
 

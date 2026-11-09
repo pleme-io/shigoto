@@ -1,7 +1,5 @@
 //! shigoto-retry — typed failure-recovery strategies.
 //!
-//! Spec: `theory/SHIGOTO.md` §III.8 + §VII.
-//!
 //! Per-kind `RetryPolicy` registered with the scheduler. On every
 //! `Failed → Retrying|Deadletter` decision the scheduler calls
 //! `policy.decide(attempt, history)`. Default is `NoRetry` —

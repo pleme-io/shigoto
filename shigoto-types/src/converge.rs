@@ -1,6 +1,6 @@
 //! `converge` — the universal state-convergence trait + typed Plan/Outcome border.
 //!
-//! RE-HOMED from `magma-converge` (2026-06-05, theory/CONVERGENCE-ADOPTION.md):
+//! RE-HOMED from `magma-converge` (2026-06-05):
 //! the `Reconciler` trait + its entire data border (`Plan`/`Outcome`/`Change`/
 //! `Action`/`ChangeSeverity`/`PlanId`/`AppliedChange`/`FailedChange`/`ReconcilerError`
 //! + `ApplyMetrics` + the `build_outcome`/`change`/`change_with_severity` helpers) is
@@ -10,8 +10,6 @@
 //! lightweight `shigoto-types`. magma-converge re-exports every name for back-compat,
 //! exactly as `policy.rs`/`decision.rs` already do. State/config/plan stay type-erased
 //! `serde_json::Value` so the trait is object-safe (`SharedReconciler = Arc<dyn ...>`).
-//!
-//! Per `theory/CONVERGENCE-SUBSTRATE.md`.
 
 use std::sync::Arc;
 
@@ -249,8 +247,6 @@ pub type SharedReconciler = Arc<dyn Reconciler>;
 /// call at apply boundaries. magma-converge stays free of Prometheus
 /// / metrics-rs / OpenTelemetry — implementors plug in whatever they
 /// want. `magma-metrics::Metrics` is the canonical Prometheus impl.
-///
-/// Per `theory/CONVERGENCE-SUBSTRATE.md` §IV.3.
 pub trait ApplyMetrics: Send + Sync {
     /// Called when a reconciler-driven `apply` begins. Implementors
     /// typically increment an `in_flight` gauge.

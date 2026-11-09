@@ -1,6 +1,5 @@
 //! Typed stuck-state escalation — the canonical `TimeoutWatcher<S>`
 //! primitive every fleet-wide FSM-timeout watchdog consumes.
-//! Spec: `theory/CONVERGENCE-ADOPTION.md` §II.4, Phase 0.3.
 //!
 //! Subsumes the hand-rolled "stuck in state X for too long" shapes
 //! that previously lived in:
@@ -169,8 +168,6 @@ fn elapsed_nonneg(entered_at: DateTime<Utc>, now: DateTime<Utc>) -> Duration {
 }
 
 // ── ScheduleWindow — typed schedule-with-window primitive ─────────
-//
-// Spec: theory/FLUXCD-CONVERGENCE.md §III, P1.0.
 //
 // Subsumes FluxCD's ResourceSetInputProvider `schedule[].{cron, timeZone, window}`
 // pattern: an operation should fire at each cron tick, but only run if

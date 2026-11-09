@@ -23,8 +23,8 @@ shigoto-gate = { version = "0.1.17", path = "shigoto-gate" }
 shigoto-emit = { version = "0.1.17", path = "shigoto-emit" }
 shigoto-test = { version = "0.1.17", path = "shigoto-test" }
 
-# Pleme-io registry deps for typed-dispatcher catalog integration
-# (theory/UNIFIED-COMPUTING-MODEL.md §VI). crates.io, never git.
+# Pleme-io registry deps for typed-dispatcher catalog integration.
+# crates.io, never git.
 gen-platform = "0.1"
 gen-types = "0.1"
 

@@ -1,6 +1,6 @@
 # shigoto (仕事)
 
-> The typed job-system primitive for pleme-io. **Spec:** [`theory/SHIGOTO.md`](https://github.com/pleme-io/theory/blob/main/SHIGOTO.md).
+> The typed job-system primitive for pleme-io.
 
 `shigoto` is a typed primitive every pleme-io tool whose internals form a
 dependency-ordered, fallible, retryable, parallelism-bounded work graph
@@ -44,7 +44,7 @@ Consumers depend on `shigoto = "0.1"` and reach the algebra via
 
 ## Status
 
-**v0.1.0 — scaffold.** Public surface declared per the [canonical spec](https://github.com/pleme-io/theory/blob/main/SHIGOTO.md);
+**v0.1.0 — scaffold.** Public surface declared;
 implementations land as the bootstrap consumer (`tend`) migrates per
 SHIGOTO.md §IV.3 (M0.7–M0.11).
 

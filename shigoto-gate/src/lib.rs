@@ -1,6 +1,6 @@
 //! shigoto-gate — typed precondition Gate trait + standard gates.
 //!
-//! Spec: `theory/SHIGOTO.md` §III.9. Gates are PURE — they evaluate
+//! Gates are PURE — they evaluate
 //! against the scheduler snapshot without IO. IO-dependent gating is
 //! itself a Job that produces a typed fact a downstream gate checks.
 
@@ -35,7 +35,7 @@ pub struct GateContext<'a> {
 
 /// One gate's verdict.
 ///
-/// **The derived-verdict law** (`theory/UNREPRESENTABILITY.md` §II.4):
+/// **The derived-verdict law**:
 /// a gate that examined nothing must not wear the badge of a gate that
 /// examined many and found them all good. `Vacuous` is therefore a
 /// distinct arm rather than a silent branch of `Pass`.

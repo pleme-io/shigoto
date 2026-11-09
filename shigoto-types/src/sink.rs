@@ -1,6 +1,5 @@
 //! Typed event sink — the canonical `Sink<T>` trait every fleet-wide
-//! event recorder consumes. Spec: `theory/CONVERGENCE-ADOPTION.md`
-//! §II.1, Phase 0.1.
+//! event recorder consumes.
 //!
 //! Subsumes the hand-rolled sink shapes that previously lived in:
 //!

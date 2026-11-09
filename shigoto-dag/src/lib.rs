@@ -1,7 +1,5 @@
 //! shigoto-dag — typed dependency graph over JobIds.
 //!
-//! Spec: `theory/SHIGOTO.md` §III.5 + §V.
-//!
 //! Lifted from `tend/src/operator/dag.rs` (the prototype that exercised
 //! this shape against pleme-io's flake-update workspace). Generalized
 //! from the flake-specific `DagNodeId { repo, input }` to the typed

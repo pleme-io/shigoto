@@ -20,8 +20,7 @@
 //! This proves a **graph-reachability** property over the *declared* transition
 //! relation: from every state, a good terminal is reachable. It is a mechanical
 //! CI forcing-function, **not** a dependent-type proof — Rust cannot express
-//! "every path terminates" as a compile error (the C1 ceiling in
-//! `theory/UNREPRESENTABILITY.md`). It does NOT prove *liveness* (that the
+//! "every path terminates" as a compile error (the C1 ceiling). It does NOT prove *liveness* (that the
 //! runtime actually drives the FSM forward) nor absence of cycles that merely
 //! *delay* a terminal. It proves the topology admits convergence; the runtime
 //! must still take the edges. State that plainly.
@@ -127,8 +126,7 @@ impl std::fmt::Display for FsmDefect {
 /// The state space is **non-empty** — the precondition every proof below
 /// silently assumed.
 ///
-/// **The vacuous-guard defect** (`theory/UNREPRESENTABILITY.md` §II.3
-/// subclass A — "a gate never observed to fail may be checking nothing").
+/// **The vacuous-guard defect** ("a gate never observed to fail may be checking nothing").
 /// Every `check_*` in this crate is a `for &s in F::all()` loop that
 /// accumulates defects. Over an empty `all()` each loop runs zero times,
 /// returns zero defects, and [`assert_convergent_fsm`] reports `Ok(())` — a

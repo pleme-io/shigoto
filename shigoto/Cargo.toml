@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "shigoto (仕事) — the typed job-system primitive. Umbrella crate; re-exports types/dag/scheduler/budget/retry/gate/emit. Spec: theory/SHIGOTO.md."
+description = "shigoto (仕事) — the typed job-system primitive. Umbrella crate; re-exports types/dag/scheduler/budget/retry/gate/emit."
 
 [lints]
 workspace = true

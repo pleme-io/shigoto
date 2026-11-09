@@ -1,10 +1,8 @@
 //! shigoto-types — typed primitives every other shigoto crate consumes.
 //!
-//! Spec: `theory/SHIGOTO.md` §III.1–III.4 + §III.11–III.12.
-//!
 //! v0.1.0 is the scaffold: trait + enum + struct surfaces declared,
 //! implementations land as the bootstrap consumer (`tend`) migrates
-//! per `theory/SHIGOTO.md` §IV.3 (M0.9 in the broader plan).
+//! (M0.9 in the broader plan).
 
 #![forbid(unsafe_code)]
 
@@ -29,7 +27,7 @@ pub mod watch;
 pub use watch::{EscalationRouting, ScheduleWindow, TimeoutWatcher, WatchAction, WatchRule};
 
 // Lightweight convergence primitives re-homed from magma-converge
-// (2026-06-02) — see theory/CONVERGENCE-ADOPTION.md. General, pure,
+// (2026-06-02). General, pure,
 // IaC-free, so lightweight controllers adopt them without the magma
 // executor closure.
 pub mod policy;
@@ -109,8 +107,7 @@ impl JobKindId {
     }
 }
 
-/// FSM phase a Job inhabits. See `theory/SHIGOTO.md` §III.3 for the
-/// transition table.
+/// FSM phase a Job inhabits. See [`advance`] for the transition table.
 ///
 /// `kind()` (variant → stable kebab-case string) + variant predicates
 /// (`is_pending`, `is_gated`, ...) auto-generated via gen-platform
@@ -160,8 +157,8 @@ pub enum SkipReason {
 }
 
 /// FSM driver — every legal way a Job's phase can change. Exhaustive
-/// over the `(JobPhase, Signal)` cross-product per `theory/SHIGOTO.md`
-/// §IV.1; the `advance` table below enumerates every cell.
+/// over the `(JobPhase, Signal)` cross-product; the `advance` table
+/// below enumerates every cell.
 ///
 /// `kind()` + variant predicates auto-generated via gen-platform.
 #[derive(Debug, Clone, PartialEq, Eq, gen_platform::Discriminant, gen_platform::IsVariant)]
@@ -201,7 +198,7 @@ pub enum Signal {
 /// reducer in shigoto-gate. We carry the rolled-up result here so the
 /// FSM stays language-agnostic about how the rollup is computed.
 ///
-/// **The derived-verdict law** (`theory/UNREPRESENTABILITY.md` §II.4):
+/// **The derived-verdict law**:
 /// a verdict is derived from the subject set it claims about and
 /// carries the witness of that derivation. Concretely here:
 ///
@@ -254,8 +251,7 @@ pub enum RetryOutcome {
 
 // Fleet-wide dispatcher-catalog registration for shigoto's retry
 // outcome typed surface. Fifth consumer class (after gen / caixa /
-// wasm-platform / cofre). See theory/UNIFIED-COMPUTING-MODEL.md §VI
-// for the absorption roadmap.
+// wasm-platform / cofre).
 gen_platform::register_dispatcher!("shigoto.retry-outcome", RetryOutcome);
 
 /// Rejected transition — `(from, signal)` is not a legal FSM cell.
@@ -282,8 +278,6 @@ impl Signal {
 /// produces the same result. Exhaustive over `JobPhase × Signal` —
 /// adding a new phase or signal fails to compile until every cell
 /// of the cross-product is decided.
-///
-/// Per `theory/SHIGOTO.md` §IV.1 + the diagram in §III.3.
 pub fn advance(from: JobPhase, signal: Signal) -> Result<JobPhase, IllegalTransition> {
     use Signal::*;
     let new = match (&from, &signal) {
@@ -366,7 +360,7 @@ pub trait JobError: std::error::Error + Send + Sync + 'static {}
 /// trails, dashboards) can read the typed outcomes the scheduler's
 /// phase-tracking discards.
 ///
-/// Per `theory/SHIGOTO.md` §VIII (output capture) — the scheduler
+/// Output capture: the scheduler
 /// itself doesn't hold sinks; Jobs carry them. This keeps the typed
 /// `O` parameter from leaking into the scheduler's heterogeneous
 /// `Vec<Box<dyn ErasedJob>>` storage (which would require type
@@ -495,7 +489,7 @@ impl<T: RecordingJob> Job for T {
 }
 
 /// The typed Job trait — what every consumer's domain-specific job
-/// implements. Per `theory/SHIGOTO.md` §III.1.
+/// implements.
 ///
 /// Constraints baked in:
 /// - `'static + Send + Sync` — jobs may move between scheduler threads.
@@ -612,7 +606,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Derived view: every job currently in {Failed, Retrying,
-    /// Deadlettered}. Per `theory/SHIGOTO.md` §VII.2 — broader than
+    /// Deadlettered}. Broader than
     /// `TickReceipt.unhealed` (which is just Deadlettered +
     /// WaitingForOperator) because it includes the transient retry
     /// states. Useful for debugging "what's currently failing across

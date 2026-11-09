@@ -1,6 +1,5 @@
 //! Typed policy cascade — the canonical `CascadePolicy` trait every
 //! fleet-wide multi-layer-override system consumes.
-//! Spec: `theory/CONVERGENCE-ADOPTION.md` §II.2.
 //!
 //! This is a **lightweight, general** convergence primitive — pure value
 //! transformation, no IaC / domain / clock coupling. It is homed in

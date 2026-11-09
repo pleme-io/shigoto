@@ -1,6 +1,6 @@
 //! shigoto-scheduler — the typed runtime.
 //!
-//! Spec: `theory/SHIGOTO.md` §III.6. A `Scheduler` is NOT a daemon —
+//! A `Scheduler` is NOT a daemon —
 //! one `tick` per call. Daemons loop `tick → wait_for_change → tick`;
 //! K8s reconcilers map each CR event to one `tick`. v0.1 ships
 //! `InProcessScheduler` driving the FSM via `shigoto_types::advance`;

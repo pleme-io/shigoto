@@ -1,6 +1,6 @@
 //! shigoto-budget — typed three-dimension parallelism envelope.
 //!
-//! Spec: `theory/SHIGOTO.md` §III.7 + §VI. Composition is
+//! Composition is
 //! min-intersection: a job runs iff every applicable budget (global,
 //! by-kind, by-scope) has slack. v0.1 ships the pure allocate /
 //! release primitive; scheduler integration lands in M0.9j.

@@ -1,7 +1,5 @@
 //! `Chain<I, O>` — first-match-wins composition over typed rules.
 //!
-//! Spec: `theory/PATTERN-EXTRACTION.md` Pattern 3 (Chain).
-//!
 //! Extracted after multiple primitives shipped the same shape:
 //!
 //!   - `ChainedClassifier<I, O>` — typed-classifier chain

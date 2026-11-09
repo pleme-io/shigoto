@@ -1,6 +1,6 @@
 //! shigoto-test — test helpers for consumers.
 //!
-//! Per `theory/SHIGOTO.md` §III.13: the canonical proof that a Job
+//! The canonical proof that a Job
 //! is idempotent. v0.1 ships `idempotence_quickcheck` — invokes
 //! `execute()` twice with a consumer-provided "observe domain state"
 //! closure, asserts that:

@@ -1,6 +1,5 @@
 //! Typed input classification — the canonical `Classifier<I, O>`
 //! trait every fleet-wide raw-input-to-typed-event pipeline consumes.
-//! Spec: `theory/CONVERGENCE-ADOPTION.md` §II.5, Phase 0.2.
 //!
 //! Subsumes the hand-rolled classification shapes that previously
 //! lived in:
