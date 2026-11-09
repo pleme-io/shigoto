@@ -92,7 +92,7 @@ where
 /// classifier. Each rule is tried in declared order; the first
 /// `Some(out)` wins. If no rule matches, the fallback fires.
 ///
-/// As of the Chain extraction (PATTERN-EXTRACTION.md Pattern 3),
+/// As of the Chain extraction,
 /// `ChainedClassifier<I, O>` is a typed alias over the generic
 /// [`crate::chain::Chain<I, O>`]. Construction (`Chain::new` +
 /// `with_rule`) and the `Classifier::classify` impl are inherited

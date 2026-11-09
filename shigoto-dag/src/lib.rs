@@ -8,7 +8,7 @@
 //! its own JobIds and the Dag operates over them uniformly.
 //!
 //! v0.1 carries the IDs only; full Job-storage lands as M0.8 of the
-//! migration plan (SHIGOTO.md §IV.3) when the Scheduler runtime needs
+//! migration plan when the Scheduler runtime needs
 //! to hand each Job to its execute hook. Until then, `Dag` is the
 //! typed topology surface — `add_edge`, `toposort`, `waves` — and
 //! consumers maintain their own JobId → Job lookup.

@@ -45,10 +45,10 @@ Consumers depend on `shigoto = "0.1"` and reach the algebra via
 ## Status
 
 **v0.1.0 — scaffold.** Public surface declared;
-implementations land as the bootstrap consumer (`tend`) migrates per
-SHIGOTO.md §IV.3 (M0.7–M0.11).
+implementations land as the bootstrap consumer (`tend`) migrates
+(M0.7–M0.11).
 
-Prime-directive promotion criteria (SHIGOTO.md §V.1):
+Prime-directive promotion criteria:
 - [ ] Two production consumers, ≥30 days operational use
 - [ ] Typed surface stable ≥30 days (no breaking changes to Job/Dag/Scheduler)
 - [ ] Audit log consumed by ≥1 sink nothing else reads
