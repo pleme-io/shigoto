@@ -2,7 +2,7 @@
   "schema_version": 2,
   "cargo_lock_sha256": "020d2cf483739cd4f0aaf48c826a2f3a044ab1c4fd9732b7468642026b37bea5",
   "manifest_sha256": {
-    "Cargo.toml": "1c40041d4a5bffbf59aad4587392261fe4925ac9852dded2a2a746fed8548b6b",
+    "Cargo.toml": "42f83eadfb5f9e5b823d00f31e570fe77157397b1288cabd9297bfb16036f75b",
     "shigoto-budget/Cargo.toml": "10521c78474ac98a95a24c3494acded445b24cfc244c1ae86b2770807496d4e7",
     "shigoto-dag/Cargo.toml": "3c33a3eb5105592f79f9fe291aa6e3f30ea4a8206e83530a6dab8a215bb648d1",
     "shigoto-emit/Cargo.toml": "9db56658206e4c46bb13d0176387bac8b70ce633ed16dea4bc782bd95315b86e",
@@ -13,7 +13,7 @@
     "shigoto-scheduler/Cargo.toml": "c346f96117fb55985581b91693e338bc5df92683d6054edb9f04881bcc5fd8b2",
     "shigoto-test/Cargo.toml": "9e82a7b4635005a1caa7f9f0f8136c6983e0cede5a4b66831e3128888f780940",
     "shigoto-types/Cargo.toml": "6c654a3bf5a8326dfc258f76d3440cb14fa8e4212dad06067008a188737fbec5",
-    "shigoto/Cargo.toml": "6b3ee4e00133f9ae2d5c4f21bc1c189b46d43c5ad809b279a8b805179420c79f"
+    "shigoto/Cargo.toml": "c1cfd9e8132ad46df55841334a36600b4019a66932094d9f0391c766fadf808a"
   },
   "target_resolves": {
     "base": {
